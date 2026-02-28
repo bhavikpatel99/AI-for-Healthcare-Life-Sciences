@@ -1,0 +1,47 @@
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  AI Healthcare Workflow Support - Serverless backend (Lambda + API Gateway + Bedrock)
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Timeout: 30
+    MemorySize: 1024
+    Tracing: Active
+
+Parameters:
+  BedrockModelId:
+    Type: String
+    Default: anthropic.claude-3-haiku-20240307-v1:0
+  BedrockRegion:
+    Type: String
+    Default: us-east-1
+
+Resources:
+  AnalyzeDocumentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../backend
+      Handler: src/handlers/analyzeDocument.handler
+      Environment:
+        Variables:
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          BEDROCK_REGION: !Ref BedrockRegion
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: '*'
+      Events:
+        ApiInvoke:
+          Type: HttpApi
+          Properties:
+            Path: /api/analyze
+            Method: POST
+
+Outputs:
+  ApiEndpoint:
+    Description: HTTP API endpoint
+    Value: !Sub 'https://${AnalyzeDocumentFunction.ApiInvoke.HttpApiId}.execute-api.${AWS::Region}.amazonaws.com'
+
