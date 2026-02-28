@@ -1,0 +1,65 @@
+# ------------------------------
+# Node / React
+# ------------------------------
+PrototypeDemo/frontend/node_modules/
+PrototypeDemo/frontend/dist/
+PrototypeDemo/frontend/.vite/
+PrototypeDemo/frontend/.env
+PrototypeDemo/frontend/.env.*
+
+# ------------------------------
+# Python / Lambda
+# ------------------------------
+PrototypeDemo/backend/__pycache__/
+PrototypeDemo/backend/*.pyc
+PrototypeDemo/backend/venv/
+PrototypeDemo/backend/.env
+
+# ------------------------------
+# Terraform / Infra
+# ------------------------------
+PrototypeDemo/infra/.terraform/
+PrototypeDemo/infra/*.tfstate
+PrototypeDemo/infra/*.tfstate.backup
+
+# ------------------------------
+# AWS Builds
+# ------------------------------
+.aws-sam/
+.serverless/
+
+# ------------------------------
+# Secrets
+# ------------------------------
+.env
+.env.*
+*.env
+
+# ------------------------------
+# Logs
+# ------------------------------
+*.log
+
+# ------------------------------
+# OS
+# ------------------------------
+.DS_Store
+Thumbs.db
+
+# ------------------------------
+# IDE
+# ------------------------------
+.vscode/
+.idea/
+
+# ------------------------------
+# Temporary
+# ------------------------------
+*.tmp
+*.swp
+*.bak
+
+# ------------------------------
+# Generated Reports
+# ------------------------------
+generated-reports/
