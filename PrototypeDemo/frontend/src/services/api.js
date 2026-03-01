@@ -1,5 +1,5 @@
-const BASE_URL = process.env.REACT_APP_BASE_URL
-
+const BASE_URL = process.env.production.REACT_APP_BASE_URL
+console.log("API Base URL:", BASE_URL)
 // Upload + Process Document
 export const processDocument = async (file) => {
   const formData = new FormData()

@@ -223,95 +223,70 @@ echo "  ✓ IAM ready."
 # ================================================
 echo "[4/7] Packaging Lambda functions..."
 
-# Create temporary directory for Lambda packages
-# mkdir -p /tmp/lambda-packages
 TMP_DIR="$PWD/.tmp"
 mkdir -p "$TMP_DIR"
 
-# Package document processing Lambda
-if [ -d "lambda/document-processor" ]; then
-    echo "  📦 Packaging document processor..."
-    cd lambda/document-processor
-    zip -r /tmp/lambda-packages/document-processor.zip . > /dev/null
-    cd ../..
-    echo "  ✓ Document processor packaged"
-else
-    echo "  ⚠ Warning: lambda/document-processor directory not found"
+# Convert to Windows path
+WIN_TMP_DIR=$(cd "$TMP_DIR" && pwd -W)
+
+LAMBDA_SRC="../backend/lambda"
+
+if [ ! -d "$LAMBDA_SRC" ]; then
+  echo "❌ ERROR: Lambda folder not found at $LAMBDA_SRC"
+  exit 1
 fi
 
-# Package results retrieval Lambda
-if [ -d "lambda/results-retrieval" ]; then
-    echo "  📦 Packaging results retrieval..."
-    cd lambda/results-retrieval
-    zip -r /tmp/lambda-packages/results-retrieval.zip . > /dev/null
-    cd ../..
-    echo "  ✓ Results retrieval packaged"
-else
-    echo "  ⚠ Warning: lambda/results-retrieval directory not found"
-fi
+echo "📦 Packaging ALL Lambda handlers..."
+
+cd $LAMBDA_SRC
+
+powershell.exe -Command "
+New-Item -ItemType Directory -Force -Path '$WIN_TMP_DIR' | Out-Null;
+Compress-Archive -Path * -DestinationPath '$WIN_TMP_DIR\lambda.zip' -Force
+"
+
+cd ../../infra
+
+echo "✓ Lambda packaged successfully"
 
 echo "[5/7] Deploying Lambda functions..."
 
 # Deploy document processor Lambda
-if [ -f "/tmp/lambda-packages/document-processor.zip" ]; then
-    if aws lambda get-function --function-name MediAssist-DocumentProcessor &>/dev/null; then
-        echo "  ℹ Updating existing DocumentProcessor function..."
-        aws lambda update-function-code \
-            --function-name MediAssist-DocumentProcessor \
-            --zip-file fileb:///tmp/lambda-packages/document-processor.zip > /dev/null
-    else
-        echo "  ✓ Creating DocumentProcessor function..."
-        aws lambda create-function \
-            --function-name MediAssist-DocumentProcessor \
-            --runtime python3.11 \
-            --role "$LAMBDA_ROLE_ARN" \
-            --handler lambda_function.lambda_handler \
-            --zip-file fileb:///tmp/lambda-packages/document-processor.zip \
-            --timeout 300 \
-            --memory-size 512 \
-            --environment Variables="{S3_BUCKET=$S3_DOCS_BUCKET,DYNAMODB_TABLE=$DYNAMODB_RESULTS_TABLE,AUDIT_TABLE=$DYNAMODB_AUDIT_TABLE}" > /dev/null
-    fi
-    echo "  ✓ DocumentProcessor deployed"
-    echo "  ⏳ Waiting for Lambda to be ready..."
+aws lambda create-function \
+  --function-name MediAssist-Process \
+  --runtime python3.11 \
+  --role "$LAMBDA_ROLE_ARN" \
+  --handler process_document.lambda_handler \
+  --zip-file "fileb://$WIN_TMP_DIR/lambda.zip" \
+  --timeout 300 \
+  --memory-size 512 || \
+aws lambda update-function-code \
+  --function-name MediAssist-Process \
+  --zip-file "fileb://$WIN_TMP_DIR/lambda.zip"
 
-    aws lambda wait function-active \
-        --function-name MediAssist-DocumentProcessor
+  aws lambda create-function \
+  --function-name MediAssist-Approve \
+  --runtime python3.11 \
+  --role "$LAMBDA_ROLE_ARN" \
+  --handler approve_document.lambda_handler \
+  --zip-file "fileb://$WIN_TMP_DIR/lambda.zip" \
+  --timeout 30 \
+  --memory-size 256 || \
+aws lambda update-function-code \
+  --function-name MediAssist-Approve \
+  --zip-file "fileb://$WIN_TMP_DIR/lambda.zip"
 
-    aws lambda wait function-active \
-        --function-name MediAssist-ResultsRetrieval
-
-    echo "  ✓ Lambda is ACTIVE"
-fi
-
-# Deploy results retrieval Lambda
-if [ -f "/tmp/lambda-packages/results-retrieval.zip" ]; then
-    if aws lambda get-function --function-name MediAssist-ResultsRetrieval &>/dev/null; then
-        echo "  ℹ Updating existing ResultsRetrieval function..."
-        aws lambda update-function-code \
-            --function-name MediAssist-ResultsRetrieval \
-            --zip-file fileb:///tmp/lambda-packages/results-retrieval.zip > /dev/null
-    else
-        echo "  ✓ Creating ResultsRetrieval function..."
-        aws lambda create-function \
-            --function-name MediAssist-ResultsRetrieval \
-            --runtime python3.11 \
-            --role "$LAMBDA_ROLE_ARN" \
-            --handler lambda_function.lambda_handler \
-            --zip-file fileb:///tmp/lambda-packages/results-retrieval.zip \
-            --timeout 30 \
-            --memory-size 256 \
-            --environment Variables="{DYNAMODB_TABLE=$DYNAMODB_RESULTS_TABLE}" > /dev/null
-    fi
-    echo "  ✓ ResultsRetrieval deployed"
-    
-    echo "  ⏳ Waiting for Lambda to be ready..."
-
-    aws lambda wait function-active \
-        --function-name MediAssist-DocumentProcessor
-
-    aws lambda wait function-active \
-        --function-name MediAssist-ResultsRetrieval
-fi
+  aws lambda create-function \
+  --function-name MediAssist-Audit \
+  --runtime python3.11 \
+  --role "$LAMBDA_ROLE_ARN" \
+  --handler get_audit_log.lambda_handler \
+  --zip-file "fileb://$WIN_TMP_DIR/lambda.zip" \
+  --timeout 30 \
+  --memory-size 256 || \
+aws lambda update-function-code \
+  --function-name MediAssist-Audit \
+  --zip-file "fileb://$WIN_TMP_DIR/lambda.zip"
 
 echo "  ✓ Lambda functions ready."
 
@@ -338,11 +313,25 @@ if [ -z "$API_ID" ]; then
     echo "API Created: $API_ID"
 
     aws lambda add-permission \
-        --function-name MediAssist-DocumentProcessor \
-        --statement-id apigateway-access \
-        --action lambda:InvokeFunction \
-        --principal apigateway.amazonaws.com \
-        --source-arn "arn:aws:execute-api:$AWS_REGION:$ACCOUNT_ID:$API_ID/*/*"
+  --function-name MediAssist-Process \
+  --statement-id apigateway-access-process \
+  --action lambda:InvokeFunction \
+  --principal apigateway.amazonaws.com \
+  --source-arn "arn:aws:execute-api:$AWS_REGION:$ACCOUNT_ID:$API_ID/*/*" || true
+
+aws lambda add-permission \
+  --function-name MediAssist-Approve \
+  --statement-id apigateway-access-approve \
+  --action lambda:InvokeFunction \
+  --principal apigateway.amazonaws.com \
+  --source-arn "arn:aws:execute-api:$AWS_REGION:$ACCOUNT_ID:$API_ID/*/*" || true
+
+aws lambda add-permission \
+  --function-name MediAssist-Audit \
+  --statement-id apigateway-access-audit \
+  --action lambda:InvokeFunction \
+  --principal apigateway.amazonaws.com \
+  --source-arn "arn:aws:execute-api:$AWS_REGION:$ACCOUNT_ID:$API_ID/*/*" || true
 fi
 
 echo "Ensuring Integration exists..."
@@ -415,7 +404,7 @@ echo "API URL: $API_URL"
 echo "Creating React ENV..."
 
 cat > ../frontend/.env.production <<EOF
-REACT_APP_BASE_URL=$API_URL
+VITE_API_BASE_URL=$API_URL
 EOF
 
 echo "Building React..."

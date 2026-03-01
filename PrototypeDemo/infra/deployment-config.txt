@@ -1,10 +1,10 @@
 AWS_REGION=us-east-1
-S3_DOCS_BUCKET=mediassist-ai-documents-86399
-S3_FRONTEND_BUCKET=mediassist-ai-frontend-86399
+S3_DOCS_BUCKET=mediassist-ai-documents-95546
+S3_FRONTEND_BUCKET=mediassist-ai-frontend-95546
 DYNAMODB_RESULTS_TABLE=MediAssist-Results
 DYNAMODB_USERS_TABLE=MediAssist-Users
 DYNAMODB_AUDIT_TABLE=MediAssist-AuditLog
 LAMBDA_ROLE_ARN=arn:aws:iam::116671358608:role/MediAssist-Lambda-Role
 ACCOUNT_ID=116671358608
-API_URL=https://3xrhr9dg0a.execute-api.us-east-1.amazonaws.com/prod
-DEPLOYMENT_DATE="Sun Mar  1 23:05:55 IST 2026"
+API_URL=https://sqmtu0ghqd.execute-api.us-east-1.amazonaws.com/prod
+DEPLOYMENT_DATE="Mon Mar  2 01:37:52 IST 2026"
