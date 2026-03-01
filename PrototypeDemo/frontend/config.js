@@ -1,0 +1,3 @@
+window.APP_CONFIG = {
+  BASE_URL: "REPLACE_ME"
+};
