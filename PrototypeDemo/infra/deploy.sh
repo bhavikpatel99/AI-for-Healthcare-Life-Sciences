@@ -93,6 +93,26 @@ fi
 # Configure frontend bucket for static website hosting
 aws s3 website "s3://$S3_FRONTEND_BUCKET" --index-document index.html --error-document error.html
 
+echo "Configuring public access..."
+
+aws s3api put-public-access-block \
+    --bucket $S3_FRONTEND_BUCKET \
+    --public-access-block-configuration \
+    "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false"
+
+aws s3api put-bucket-policy \
+    --bucket $S3_FRONTEND_BUCKET \
+    --policy "{
+        \"Version\":\"2012-10-17\",
+        \"Statement\":[{
+            \"Sid\":\"PublicReadGetObject\",
+            \"Effect\":\"Allow\",
+            \"Principal\":\"*\",
+            \"Action\":\"s3:GetObject\",
+            \"Resource\":\"arn:aws:s3:::$S3_FRONTEND_BUCKET/*\"
+        }]
+    }"
+
 echo "  ✓ S3 ready."
 
 # ================================================
@@ -252,6 +272,15 @@ if [ -f "/tmp/lambda-packages/document-processor.zip" ]; then
             --environment Variables="{S3_BUCKET=$S3_DOCS_BUCKET,DYNAMODB_TABLE=$DYNAMODB_RESULTS_TABLE,AUDIT_TABLE=$DYNAMODB_AUDIT_TABLE}" > /dev/null
     fi
     echo "  ✓ DocumentProcessor deployed"
+    echo "  ⏳ Waiting for Lambda to be ready..."
+
+    aws lambda wait function-active \
+        --function-name MediAssist-DocumentProcessor
+
+    aws lambda wait function-active \
+        --function-name MediAssist-ResultsRetrieval
+
+    echo "  ✓ Lambda is ACTIVE"
 fi
 
 # Deploy results retrieval Lambda
@@ -274,6 +303,14 @@ if [ -f "/tmp/lambda-packages/results-retrieval.zip" ]; then
             --environment Variables="{DYNAMODB_TABLE=$DYNAMODB_RESULTS_TABLE}" > /dev/null
     fi
     echo "  ✓ ResultsRetrieval deployed"
+    
+    echo "  ⏳ Waiting for Lambda to be ready..."
+
+    aws lambda wait function-active \
+        --function-name MediAssist-DocumentProcessor
+
+    aws lambda wait function-active \
+        --function-name MediAssist-ResultsRetrieval
 fi
 
 echo "  ✓ Lambda functions ready."
@@ -282,21 +319,123 @@ echo "  ✓ Lambda functions ready."
 # Step 6: Create API Gateway
 # ================================================
 echo "[6/7] Setting up API Gateway..."
-echo "  ℹ API Gateway setup would go here (REST API or HTTP API)"
-echo "  ✓ API Gateway ready."
 
+API_NAME="MediAssist-HTTP-API"
+
+API_ID=$(aws apigatewayv2 get-apis \
+    --query "Items[?Name=='$API_NAME'].ApiId" \
+    --output text)
+
+if [ -z "$API_ID" ]; then
+    echo "Creating API..."
+
+    API_ID=$(aws apigatewayv2 create-api \
+        --name "$API_NAME" \
+        --protocol-type HTTP \
+        --query 'ApiId' \
+        --output text)
+
+    echo "API Created: $API_ID"
+
+    aws lambda add-permission \
+        --function-name MediAssist-DocumentProcessor \
+        --statement-id apigateway-access \
+        --action lambda:InvokeFunction \
+        --principal apigateway.amazonaws.com \
+        --source-arn "arn:aws:execute-api:$AWS_REGION:$ACCOUNT_ID:$API_ID/*/*"
+fi
+
+echo "Ensuring Integration exists..."
+
+INTEGRATION_ID=$(aws apigatewayv2 get-integrations \
+    --api-id $API_ID \
+    --query 'Items[0].IntegrationId' \
+    --output text)
+
+if [ "$INTEGRATION_ID" == "None" ] || [ -z "$INTEGRATION_ID" ]; then
+    INTEGRATION_ID=$(aws apigatewayv2 create-integration \
+        --api-id $API_ID \
+        --integration-type AWS_PROXY \
+        --integration-uri arn:aws:lambda:$AWS_REGION:$ACCOUNT_ID:function:MediAssist-DocumentProcessor \
+        --payload-format-version 2.0 \
+        --query 'IntegrationId' \
+        --output text)
+fi
+
+echo "Ensuring Routes exist..."
+
+aws apigatewayv2 create-route \
+    --api-id $API_ID \
+    --route-key "POST /process" \
+    --target "integrations/$INTEGRATION_ID" 2>/dev/null || true
+
+aws apigatewayv2 create-route \
+    --api-id $API_ID \
+    --route-key "POST /approve" \
+    --target "integrations/$INTEGRATION_ID" 2>/dev/null || true
+
+aws apigatewayv2 create-route \
+    --api-id $API_ID \
+    --route-key "GET /audit" \
+    --target "integrations/$INTEGRATION_ID" 2>/dev/null || true
+
+
+echo "⏳ Waiting for routes to register..."
+sleep 5
+
+
+echo "Deploying API..."
+aws apigatewayv2 create-deployment \
+    --api-id $API_ID \
+    --description "Auto deployment" \
+    > /dev/null || true
+
+
+echo "Ensuring Stage exists..."
+
+STAGE_EXISTS=$(aws apigatewayv2 get-stages \
+    --api-id $API_ID \
+    --query "Items[?StageName=='prod'].StageName" \
+    --output text)
+
+if [ -z "$STAGE_EXISTS" ]; then
+    aws apigatewayv2 create-stage \
+        --api-id $API_ID \
+        --stage-name prod \
+        --auto-deploy
+fi
+
+STAGE="prod"
+API_URL="https://${API_ID}.execute-api.${AWS_REGION}.amazonaws.com/${STAGE}"
+
+echo "API URL: $API_URL"
 # ================================================
 # Step 7: Deploy Frontend
 # ================================================
-echo "[7/7] Deploying frontend..."
+echo "Creating React ENV..."
 
-if [ -d "frontend" ]; then
-    aws s3 sync frontend/ "s3://$S3_FRONTEND_BUCKET" --delete
-    echo "  ✓ Frontend deployed to S3"
-else
-    echo "  ⚠ Warning: frontend directory not found"
+cat > ../frontend/.env.production <<EOF
+REACT_APP_BASE_URL=$API_URL
+EOF
+
+echo "Building React..."
+
+cd ../frontend
+npm install
+npm run build
+cd ../infra
+
+echo "Deploying frontend..."
+
+if [ ! -d "../frontend/dist" ]; then
+  echo "❌ Build output not found!"
+  exit 1
 fi
 
+aws s3 sync ../frontend/dist/ "s3://$S3_FRONTEND_BUCKET" --delete
+
+echo "  ✓ Frontend deployed"
+    
 # ================================================
 # Deployment Complete
 # ================================================
@@ -328,7 +467,8 @@ DYNAMODB_USERS_TABLE=$DYNAMODB_USERS_TABLE
 DYNAMODB_AUDIT_TABLE=$DYNAMODB_AUDIT_TABLE
 LAMBDA_ROLE_ARN=$LAMBDA_ROLE_ARN
 ACCOUNT_ID=$ACCOUNT_ID
-DEPLOYMENT_DATE=$(date)
+API_URL=$API_URL
+DEPLOYMENT_DATE="$(date)"
 CONFIG
 
 echo "💾 Configuration saved to deployment-config.txt"
