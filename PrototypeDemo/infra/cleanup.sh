@@ -22,7 +22,8 @@ DYNAMODB_TABLES=(
 # List all Lambda functions to clean up
 LAMBDA_FUNCTIONS=(
     "MediAssist-DocumentProcessor"
-    "MediAssist-ResultsRetrieval"
+    "MediAssist-AuditLog"
+    "MediAssist-ApproveDocument"
 )
 
 IAM_ROLE="MediAssist-Lambda-Role"

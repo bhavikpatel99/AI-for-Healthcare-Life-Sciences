@@ -3,7 +3,10 @@ import json
 import boto3
 import logging
 import uuid
+import base64
+from io import BytesIO
 from datetime import datetime, timezone
+from cgi import FieldStorage
 
 LOCAL = False if "AWS_LAMBDA_FUNCTION_NAME" in os.environ else True
 
@@ -21,26 +24,62 @@ S3_BUCKET = os.environ.get('S3_BUCKET', 'mediassist-documents')
 MODEL_ID = 'anthropic.claude-3-haiku-20240307-v1:0'
 
 
+# ---------------- MAIN HANDLER ----------------
+
 def lambda_handler(event, context):
 
     headers = {
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Headers': '*',
         'Access-Control-Allow-Methods': 'OPTIONS,POST',
         'Content-Type': 'application/json'
     }
 
-    if not LOCAL and event.get('httpMethod') == 'OPTIONS':
+    # Handle CORS preflight
+    if not LOCAL and event.get('requestContext', {}).get('http', {}).get('method') == 'OPTIONS':
         return {'statusCode': 200, 'headers': headers, 'body': ''}
 
     try:
-        body = event if LOCAL else json.loads(event.get('body', '{}'))
 
-        document_text = body.get('text', '')[:8000]
-        filename = body.get('filename', 'unknown')
+        # --------- INPUT HANDLING ---------
+
+        if LOCAL:
+            body = event
+            document_text = body.get('text', '')[:8000]
+            filename = body.get('filename', 'unknown')
+
+        else:
+            content_type = event['headers'].get('content-type') or event['headers'].get('Content-Type')
+
+            # FORM DATA (React Upload)
+            if content_type and "multipart/form-data" in content_type:
+
+                decoded_body = base64.b64decode(event["body"])
+
+                environ = {
+                    'REQUEST_METHOD': 'POST',
+                    'CONTENT_TYPE': content_type,
+                    'CONTENT_LENGTH': str(len(decoded_body))
+                }
+
+                fp = BytesIO(decoded_body)
+                form = FieldStorage(fp=fp, environ=environ)
+
+                uploaded_file = form['file']
+
+                filename = uploaded_file.filename
+                document_text = uploaded_file.file.read().decode('utf-8', errors='ignore')[:8000]
+
+            # JSON fallback
+            else:
+                body = json.loads(event.get('body', '{}'))
+                document_text = body.get('text', '')[:8000]
+                filename = body.get('filename', 'unknown')
 
         if not document_text:
-            return response(400, {"error": "No document text"}, headers)
+            return response(400, {"error": "No document text provided"}, headers)
+
+        # --------- PROCESS ---------
 
         doc_id = str(uuid.uuid4())
 
@@ -58,12 +97,13 @@ def lambda_handler(event, context):
         }, headers)
 
     except Exception as e:
-        logger.error(str(e))
-        return response(500, {"error": "Processing failed"}, headers)
+        logger.error(f"ERROR: {str(e)}")
+        return response(500, {"error": str(e)}, headers)
 
+
+# ---------------- S3 ----------------
 
 def upload_to_s3(doc_id, text, filename):
-
     key = f"uploads/{doc_id}_{filename}.txt"
 
     s3.put_object(
@@ -75,6 +115,8 @@ def upload_to_s3(doc_id, text, filename):
 
     return key
 
+
+# ---------------- BEDROCK ----------------
 
 def invoke_bedrock(text):
 
@@ -107,6 +149,8 @@ disclaimer
     return json.loads(content)
 
 
+# ---------------- DYNAMODB ----------------
+
 def store_result(doc_id, filename, result, s3_key):
 
     table = dynamodb.Table(RESULTS_TABLE)
@@ -136,6 +180,8 @@ def log_audit(doc_id, event_type, detail):
         "timestamp": datetime.now(timezone.utc).isoformat()
     })
 
+
+# ---------------- RESPONSE ----------------
 
 def response(code, body, headers):
     if LOCAL:
