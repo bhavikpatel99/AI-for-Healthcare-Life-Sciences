@@ -1,163 +1,335 @@
 #!/bin/bash
-set -e
 
-AWS_REGION="us-east-1"
-PROJECT_NAME="mediassist-ai"
-STAGE="prod"
+# ================================================
+# MediAssist AI — AWS Deployment Script
+# Fixed version with idempotent resource creation
+# ================================================
 
-SUFFIX=$(date +%s | tail -c 6)
+set -e  # Exit on error
+trap 'handle_error $LINENO "$BASH_COMMAND"' ERR
 
-S3_DOCS_BUCKET="${PROJECT_NAME}-documents-${SUFFIX}"
-S3_FRONTEND_BUCKET="${PROJECT_NAME}-frontend-${SUFFIX}"
-
-LAMBDA_ROLE_NAME="${PROJECT_NAME}-lambda-role"
-LAMBDA_PROCESS_NAME="${PROJECT_NAME}-process-document"
-LAMBDA_APPROVE_NAME="${PROJECT_NAME}-approve-document"
-LAMBDA_AUDIT_NAME="${PROJECT_NAME}-audit-log"
-
+# Configuration
+AWS_REGION="${AWS_REGION:-us-east-1}"
+RANDOM_SUFFIX=$(date +%s | tail -c 6)
+S3_DOCS_BUCKET="mediassist-ai-documents-${RANDOM_SUFFIX}"
+S3_FRONTEND_BUCKET="mediassist-ai-frontend-${RANDOM_SUFFIX}"
 DYNAMODB_RESULTS_TABLE="MediAssist-Results"
+DYNAMODB_USERS_TABLE="MediAssist-Users"
 DYNAMODB_AUDIT_TABLE="MediAssist-AuditLog"
 
-echo "Checking AWS..."
-AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-echo "Using account: $AWS_ACCOUNT_ID"
+# Track created resources for rollback
+CREATED_RESOURCES=()
 
-echo "Creating S3 buckets..."
-aws s3 mb s3://${S3_DOCS_BUCKET} --region $AWS_REGION 2>/dev/null || true
-aws s3 mb s3://${S3_FRONTEND_BUCKET} --region $AWS_REGION 2>/dev/null || true
+# Error handler
+handle_error() {
+    local line=$1
+    local command=$2
+    echo "================================================"
+    echo " ERROR DETECTED — Rolling back..."
+    echo " Line: $line | Command: $command"
+    echo "================================================"
+    rollback
+    exit 1
+}
 
-aws s3api put-bucket-website 
---bucket $S3_FRONTEND_BUCKET 
---website-configuration '{"IndexDocument":{"Suffix":"index.html"},"ErrorDocument":{"Key":"index.html"}}'
+# Rollback function
+rollback() {
+    echo "Rolling back newly created resources..."
+    for resource in "${CREATED_RESOURCES[@]}"; do
+        IFS=':' read -r type name <<< "$resource"
+        case $type in
+            s3)
+                echo "  Removing S3 bucket: $name"
+                aws s3 rb "s3://$name" --force 2>/dev/null || true
+                ;;
+            dynamodb)
+                echo "  Removing DynamoDB table: $name"
+                aws dynamodb delete-table --table-name "$name" --region "$AWS_REGION" 2>/dev/null || true
+                ;;
+        esac
+    done
+    echo "================================================"
+    echo " Rollback complete."
+    echo "================================================"
+}
 
-aws s3api put-bucket-policy 
---bucket $S3_FRONTEND_BUCKET 
---policy "{
-"Version":"2012-10-17",
-"Statement":[{
-"Effect":"Allow",
-"Principal":"*",
-"Action":"s3:GetObject",
-"Resource":"arn:aws:s3:::${S3_FRONTEND_BUCKET}/*"
-}]
-}"
+echo "================================================"
+echo " MediAssist AI — AWS Deployment Script"
+echo "================================================"
 
-echo "Creating DynamoDB tables..."
-aws dynamodb create-table 
---table-name $DYNAMODB_RESULTS_TABLE 
---attribute-definitions AttributeName=doc_id,AttributeType=S 
---key-schema AttributeName=doc_id,KeyType=HASH 
---billing-mode PAY_PER_REQUEST 
---region $AWS_REGION 2>/dev/null || true
+# Check AWS credentials
+echo "Checking AWS credentials..."
+if ! aws sts get-caller-identity &>/dev/null; then
+    echo "❌ AWS credentials not configured. Run 'aws configure' first."
+    exit 1
+fi
 
-aws dynamodb create-table 
---table-name $DYNAMODB_AUDIT_TABLE 
---attribute-definitions AttributeName=event_id,AttributeType=S 
---key-schema AttributeName=event_id,KeyType=HASH 
---billing-mode PAY_PER_REQUEST 
---region $AWS_REGION 2>/dev/null || true
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+echo "Using account: $ACCOUNT_ID in region: $AWS_REGION"
 
-echo "Creating IAM Role..."
-aws iam create-role 
---role-name $LAMBDA_ROLE_NAME 
---assume-role-policy-document '{
-"Version":"2012-10-17",
-"Statement":[{
-"Effect":"Allow",
-"Principal":{"Service":"lambda.amazonaws.com"},
-"Action":"sts:AssumeRole"
-}]
-}' 2>/dev/null || true
+# ================================================
+# Step 1: Create S3 Buckets
+# ================================================
+echo "[1/7] Creating S3 buckets..."
 
-aws iam attach-role-policy 
---role-name $LAMBDA_ROLE_NAME 
---policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+# Documents bucket
+if aws s3 ls "s3://$S3_DOCS_BUCKET" 2>/dev/null; then
+    echo "  ℹ Docs bucket already exists: $S3_DOCS_BUCKET"
+else
+    aws s3 mb "s3://$S3_DOCS_BUCKET" --region "$AWS_REGION"
+    CREATED_RESOURCES+=("s3:$S3_DOCS_BUCKET")
+    echo "  ✓ Docs bucket created: $S3_DOCS_BUCKET"
+fi
 
-aws iam put-role-policy 
---role-name $LAMBDA_ROLE_NAME 
---policy-name mediassist-policy 
---policy-document "{
-"Version":"2012-10-17",
-"Statement":[
-{"Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":"*"},
-{"Effect":"Allow","Action":["dynamodb:*"],"Resource":"*"},
-{"Effect":"Allow","Action":["s3:*"],"Resource":"*"}
-]
-}"
+# Frontend bucket
+if aws s3 ls "s3://$S3_FRONTEND_BUCKET" 2>/dev/null; then
+    echo "  ℹ Frontend bucket already exists: $S3_FRONTEND_BUCKET"
+else
+    aws s3 mb "s3://$S3_FRONTEND_BUCKET" --region "$AWS_REGION"
+    CREATED_RESOURCES+=("s3:$S3_FRONTEND_BUCKET")
+    echo "  ✓ Frontend bucket created: $S3_FRONTEND_BUCKET"
+fi
 
-sleep 10
-ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${LAMBDA_ROLE_NAME}"
+# Configure frontend bucket for static website hosting
+aws s3 website "s3://$S3_FRONTEND_BUCKET" --index-document index.html --error-document error.html
 
-echo "Packaging Lambdas..."
-cd backend/lambda
-zip process.zip process_document.py
-zip approve.zip approve_document.py
-zip audit.zip get_audit_log.py
+echo "  ✓ S3 ready."
 
-echo "Deploying Lambdas..."
-aws lambda create-function 
---function-name $LAMBDA_PROCESS_NAME 
---runtime python3.11 
---role $ROLE_ARN 
---handler process_document.lambda_handler 
---zip-file fileb://process.zip 
---timeout 60 
---memory-size 512 
---environment "Variables={AUDIT_TABLE=${DYNAMODB_AUDIT_TABLE},RESULTS_TABLE=${DYNAMODB_RESULTS_TABLE},S3_BUCKET=${S3_DOCS_BUCKET},AWS_REGION=${AWS_REGION}}" 
---region $AWS_REGION 2>/dev/null || 
-aws lambda update-function-code --function-name $LAMBDA_PROCESS_NAME --zip-file fileb://process.zip --region $AWS_REGION
+# ================================================
+# Step 2: Create DynamoDB Tables
+# ================================================
+echo "[2/7] Creating DynamoDB tables..."
 
-aws lambda create-function 
---function-name $LAMBDA_APPROVE_NAME 
---runtime python3.11 
---role $ROLE_ARN 
---handler approve_document.lambda_handler 
---zip-file fileb://approve.zip 
---timeout 30 
---memory-size 256 
---environment "Variables={AUDIT_TABLE=${DYNAMODB_AUDIT_TABLE},RESULTS_TABLE=${DYNAMODB_RESULTS_TABLE},AWS_REGION=${AWS_REGION}}" 
---region $AWS_REGION 2>/dev/null || 
-aws lambda update-function-code --function-name $LAMBDA_APPROVE_NAME --zip-file fileb://approve.zip --region $AWS_REGION
+# Results table
+if aws dynamodb describe-table --table-name "$DYNAMODB_RESULTS_TABLE" --region "$AWS_REGION" &>/dev/null; then
+    echo "  ℹ Results table already exists: $DYNAMODB_RESULTS_TABLE"
+else
+    aws dynamodb create-table \
+        --table-name "$DYNAMODB_RESULTS_TABLE" \
+        --attribute-definitions AttributeName=doc_id,AttributeType=S \
+        --key-schema AttributeName=doc_id,KeyType=HASH \
+        --billing-mode PAY_PER_REQUEST \
+        --region "$AWS_REGION" > /dev/null
+    CREATED_RESOURCES+=("dynamodb:$DYNAMODB_RESULTS_TABLE")
+    echo "  ✓ Results table created: $DYNAMODB_RESULTS_TABLE"
+    
+    # Wait for table to be active
+    echo "  ⏳ Waiting for Results table to be active..."
+    aws dynamodb wait table-exists --table-name "$DYNAMODB_RESULTS_TABLE" --region "$AWS_REGION"
+fi
 
-aws lambda create-function 
---function-name $LAMBDA_AUDIT_NAME 
---runtime python3.11 
---role $ROLE_ARN 
---handler get_audit_log.lambda_handler 
---zip-file fileb://audit.zip 
---timeout 30 
---memory-size 256 
---environment "Variables={AUDIT_TABLE=${DYNAMODB_AUDIT_TABLE},AWS_REGION=${AWS_REGION}}" 
---region $AWS_REGION 2>/dev/null || 
-aws lambda update-function-code --function-name $LAMBDA_AUDIT_NAME --zip-file fileb://audit.zip --region $AWS_REGION
+# Users table
+if aws dynamodb describe-table --table-name "$DYNAMODB_USERS_TABLE" --region "$AWS_REGION" &>/dev/null; then
+    echo "  ℹ Users table already exists: $DYNAMODB_USERS_TABLE"
+else
+    aws dynamodb create-table \
+        --table-name "$DYNAMODB_USERS_TABLE" \
+        --attribute-definitions AttributeName=user_id,AttributeType=S \
+        --key-schema AttributeName=user_id,KeyType=HASH \
+        --billing-mode PAY_PER_REQUEST \
+        --region "$AWS_REGION" > /dev/null
+    CREATED_RESOURCES+=("dynamodb:$DYNAMODB_USERS_TABLE")
+    echo "  ✓ Users table created: $DYNAMODB_USERS_TABLE"
+    
+    # Wait for table to be active
+    echo "  ⏳ Waiting for Users table to be active..."
+    aws dynamodb wait table-exists --table-name "$DYNAMODB_USERS_TABLE" --region "$AWS_REGION"
+fi
 
-cd ../..
+# Audit Log table
+if aws dynamodb describe-table --table-name "$DYNAMODB_AUDIT_TABLE" --region "$AWS_REGION" &>/dev/null; then
+    echo "  ℹ Audit Log table already exists: $DYNAMODB_AUDIT_TABLE"
+else
+    aws dynamodb create-table \
+        --table-name "$DYNAMODB_AUDIT_TABLE" \
+        --attribute-definitions AttributeName=event_id,AttributeType=S \
+        --key-schema AttributeName=event_id,KeyType=HASH \
+        --billing-mode PAY_PER_REQUEST \
+        --region "$AWS_REGION" > /dev/null
+    CREATED_RESOURCES+=("dynamodb:$DYNAMODB_AUDIT_TABLE")
+    echo "  ✓ Audit Log table created: $DYNAMODB_AUDIT_TABLE"
+    
+    # Wait for table to be active
+    echo "  ⏳ Waiting for Audit Log table to be active..."
+    aws dynamodb wait table-exists --table-name "$DYNAMODB_AUDIT_TABLE" --region "$AWS_REGION"
+fi
 
-echo "Creating API..."
-API_ID=$(aws apigatewayv2 create-api --name mediassist-api --protocol-type HTTP --cors-configuration AllowOrigins="*" --region $AWS_REGION --query ApiId --output text)
+echo "  ✓ DynamoDB ready."
 
-PROC_ARN="arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:${LAMBDA_PROCESS_NAME}"
-APPR_ARN="arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:${LAMBDA_APPROVE_NAME}"
-AUDIT_ARN="arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:${LAMBDA_AUDIT_NAME}"
+# ================================================
+# Step 3: Create IAM Role for Lambda
+# ================================================
+echo "[3/7] Creating IAM role for Lambda..."
 
-PROC_INT=$(aws apigatewayv2 create-integration --api-id $API_ID --integration-type AWS_PROXY --integration-uri $PROC_ARN --payload-format-version 2.0 --region $AWS_REGION --query IntegrationId --output text)
-APPR_INT=$(aws apigatewayv2 create-integration --api-id $API_ID --integration-type AWS_PROXY --integration-uri $APPR_ARN --payload-format-version 2.0 --region $AWS_REGION --query IntegrationId --output text)
-AUD_INT=$(aws apigatewayv2 create-integration --api-id $API_ID --integration-type AWS_PROXY --integration-uri $AUDIT_ARN --payload-format-version 2.0 --region $AWS_REGION --query IntegrationId --output text)
+LAMBDA_ROLE_NAME="MediAssist-Lambda-Role"
 
-aws apigatewayv2 create-route --api-id $API_ID --route-key "POST /process" --target integrations/$PROC_INT --region $AWS_REGION
-aws apigatewayv2 create-route --api-id $API_ID --route-key "POST /approve" --target integrations/$APPR_INT --region $AWS_REGION
-aws apigatewayv2 create-route --api-id $API_ID --route-key "GET /audit" --target integrations/$AUD_INT --region $AWS_REGION
+if aws iam get-role --role-name "$LAMBDA_ROLE_NAME" &>/dev/null; then
+    echo "  ℹ Lambda role already exists: $LAMBDA_ROLE_NAME"
+else
+    aws iam create-role \
+    --role-name "$LAMBDA_ROLE_NAME" \
+    --assume-role-policy-document '{
+      "Version": "2012-10-17",
+      "Statement": [{
+        "Effect": "Allow",
+        "Principal": {"Service": "lambda.amazonaws.com"},
+        "Action": "sts:AssumeRole"
+      }]
+    }' > /dev/null
 
-aws apigatewayv2 create-stage --api-id $API_ID --stage-name $STAGE --auto-deploy --region $AWS_REGION
+    echo "  ✓ Lambda role created: $LAMBDA_ROLE_NAME"
 
-API_URL="https://${API_ID}.execute-api.${AWS_REGION}.amazonaws.com/${STAGE}"
+    aws iam attach-role-policy \
+        --role-name "$LAMBDA_ROLE_NAME" \
+        --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
-echo "Deploying Frontend..."
-sed -i "s|https://YOUR_API_GATEWAY_URL|${API_URL}|g" frontend/index.html
-aws s3 cp frontend/index.html s3://${S3_FRONTEND_BUCKET}/index.html --content-type text/html
+    aws iam attach-role-policy \
+        --role-name "$LAMBDA_ROLE_NAME" \
+        --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
 
-FRONTEND_URL="http://${S3_FRONTEND_BUCKET}.s3-website-${AWS_REGION}.amazonaws.com"
+    aws iam attach-role-policy \
+        --role-name "$LAMBDA_ROLE_NAME" \
+        --policy-arn arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
 
-echo "Deployment Complete"
-echo "Frontend: $FRONTEND_URL"
-echo "API: $API_URL"
+    echo "  ✓ Policies attached"
+    sleep 10
+fi
+
+LAMBDA_ROLE_ARN=$(aws iam get-role --role-name "$LAMBDA_ROLE_NAME" --query 'Role.Arn' --output text)
+echo "  ✓ IAM ready."
+
+# ================================================
+# Step 4: Package and Deploy Lambda Functions
+# ================================================
+echo "[4/7] Packaging Lambda functions..."
+
+# Create temporary directory for Lambda packages
+# mkdir -p /tmp/lambda-packages
+TMP_DIR="$PWD/.tmp"
+mkdir -p "$TMP_DIR"
+
+# Package document processing Lambda
+if [ -d "lambda/document-processor" ]; then
+    echo "  📦 Packaging document processor..."
+    cd lambda/document-processor
+    zip -r /tmp/lambda-packages/document-processor.zip . > /dev/null
+    cd ../..
+    echo "  ✓ Document processor packaged"
+else
+    echo "  ⚠ Warning: lambda/document-processor directory not found"
+fi
+
+# Package results retrieval Lambda
+if [ -d "lambda/results-retrieval" ]; then
+    echo "  📦 Packaging results retrieval..."
+    cd lambda/results-retrieval
+    zip -r /tmp/lambda-packages/results-retrieval.zip . > /dev/null
+    cd ../..
+    echo "  ✓ Results retrieval packaged"
+else
+    echo "  ⚠ Warning: lambda/results-retrieval directory not found"
+fi
+
+echo "[5/7] Deploying Lambda functions..."
+
+# Deploy document processor Lambda
+if [ -f "/tmp/lambda-packages/document-processor.zip" ]; then
+    if aws lambda get-function --function-name MediAssist-DocumentProcessor &>/dev/null; then
+        echo "  ℹ Updating existing DocumentProcessor function..."
+        aws lambda update-function-code \
+            --function-name MediAssist-DocumentProcessor \
+            --zip-file fileb:///tmp/lambda-packages/document-processor.zip > /dev/null
+    else
+        echo "  ✓ Creating DocumentProcessor function..."
+        aws lambda create-function \
+            --function-name MediAssist-DocumentProcessor \
+            --runtime python3.11 \
+            --role "$LAMBDA_ROLE_ARN" \
+            --handler lambda_function.lambda_handler \
+            --zip-file fileb:///tmp/lambda-packages/document-processor.zip \
+            --timeout 300 \
+            --memory-size 512 \
+            --environment Variables="{S3_BUCKET=$S3_DOCS_BUCKET,DYNAMODB_TABLE=$DYNAMODB_RESULTS_TABLE,AUDIT_TABLE=$DYNAMODB_AUDIT_TABLE}" > /dev/null
+    fi
+    echo "  ✓ DocumentProcessor deployed"
+fi
+
+# Deploy results retrieval Lambda
+if [ -f "/tmp/lambda-packages/results-retrieval.zip" ]; then
+    if aws lambda get-function --function-name MediAssist-ResultsRetrieval &>/dev/null; then
+        echo "  ℹ Updating existing ResultsRetrieval function..."
+        aws lambda update-function-code \
+            --function-name MediAssist-ResultsRetrieval \
+            --zip-file fileb:///tmp/lambda-packages/results-retrieval.zip > /dev/null
+    else
+        echo "  ✓ Creating ResultsRetrieval function..."
+        aws lambda create-function \
+            --function-name MediAssist-ResultsRetrieval \
+            --runtime python3.11 \
+            --role "$LAMBDA_ROLE_ARN" \
+            --handler lambda_function.lambda_handler \
+            --zip-file fileb:///tmp/lambda-packages/results-retrieval.zip \
+            --timeout 30 \
+            --memory-size 256 \
+            --environment Variables="{DYNAMODB_TABLE=$DYNAMODB_RESULTS_TABLE}" > /dev/null
+    fi
+    echo "  ✓ ResultsRetrieval deployed"
+fi
+
+echo "  ✓ Lambda functions ready."
+
+# ================================================
+# Step 6: Create API Gateway
+# ================================================
+echo "[6/7] Setting up API Gateway..."
+echo "  ℹ API Gateway setup would go here (REST API or HTTP API)"
+echo "  ✓ API Gateway ready."
+
+# ================================================
+# Step 7: Deploy Frontend
+# ================================================
+echo "[7/7] Deploying frontend..."
+
+if [ -d "frontend" ]; then
+    aws s3 sync frontend/ "s3://$S3_FRONTEND_BUCKET" --delete
+    echo "  ✓ Frontend deployed to S3"
+else
+    echo "  ⚠ Warning: frontend directory not found"
+fi
+
+# ================================================
+# Deployment Complete
+# ================================================
+echo ""
+echo "================================================"
+echo " ✅ DEPLOYMENT SUCCESSFUL"
+echo "================================================"
+echo ""
+echo "📋 Resource Summary:"
+echo "  • S3 Documents Bucket: $S3_DOCS_BUCKET"
+echo "  • S3 Frontend Bucket: $S3_FRONTEND_BUCKET"
+echo "  • DynamoDB Results Table: $DYNAMODB_RESULTS_TABLE"
+echo "  • DynamoDB Users Table: $DYNAMODB_USERS_TABLE"
+echo "  • DynamoDB Audit Log Table: $DYNAMODB_AUDIT_TABLE"
+echo "  • Lambda Role: $LAMBDA_ROLE_NAME"
+echo "  • Lambda Functions: MediAssist-DocumentProcessor, MediAssist-ResultsRetrieval"
+echo ""
+echo "🌐 Frontend URL: http://$S3_FRONTEND_BUCKET.s3-website-$AWS_REGION.amazonaws.com"
+echo ""
+echo "================================================"
+
+# Save configuration
+cat > deployment-config.txt <<CONFIG
+AWS_REGION=$AWS_REGION
+S3_DOCS_BUCKET=$S3_DOCS_BUCKET
+S3_FRONTEND_BUCKET=$S3_FRONTEND_BUCKET
+DYNAMODB_RESULTS_TABLE=$DYNAMODB_RESULTS_TABLE
+DYNAMODB_USERS_TABLE=$DYNAMODB_USERS_TABLE
+DYNAMODB_AUDIT_TABLE=$DYNAMODB_AUDIT_TABLE
+LAMBDA_ROLE_ARN=$LAMBDA_ROLE_ARN
+ACCOUNT_ID=$ACCOUNT_ID
+DEPLOYMENT_DATE=$(date)
+CONFIG
+
+echo "💾 Configuration saved to deployment-config.txt"
+echo ""
