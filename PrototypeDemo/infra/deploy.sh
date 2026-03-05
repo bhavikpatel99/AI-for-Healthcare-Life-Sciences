@@ -11,8 +11,8 @@ trap 'handle_error $LINENO "$BASH_COMMAND"' ERR
 # Configuration
 AWS_REGION="${AWS_REGION:-us-east-1}"
 RANDOM_SUFFIX=$(date +%s | tail -c 6)
-S3_DOCS_BUCKET="mediassist-ai-documents-${RANDOM_SUFFIX}"
-S3_FRONTEND_BUCKET="mediassist-ai-frontend-${RANDOM_SUFFIX}"
+S3_DOCS_BUCKET="mediassistai-documents"
+S3_FRONTEND_BUCKET="mediassistai-frontend"
 DYNAMODB_RESULTS_TABLE="MediAssist-Results"
 DYNAMODB_USERS_TABLE="MediAssist-Users"
 DYNAMODB_AUDIT_TABLE="MediAssist-AuditLog"
@@ -210,6 +210,11 @@ else
     aws iam attach-role-policy \
         --role-name "$LAMBDA_ROLE_NAME" \
         --policy-arn arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+
+    # 🔥 BEDROCK ACCESS ADDED
+    aws iam attach-role-policy \
+        --role-name $LAMBDA_ROLE_NAME \
+        --policy-arn arn:aws:iam::aws:policy/AmazonBedrockFullAccess
 
     echo "  ✓ Policies attached"
     sleep 10
