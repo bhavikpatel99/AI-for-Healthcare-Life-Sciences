@@ -1,4 +1,4 @@
-AWS_REGION=us-east-1
+AWS_REGION=ap-south-1
 S3_DOCS_BUCKET=mediassistai-documents
 S3_FRONTEND_BUCKET=mediassistai-frontend
 DYNAMODB_RESULTS_TABLE=MediAssist-Results
@@ -6,5 +6,8 @@ DYNAMODB_USERS_TABLE=MediAssist-Users
 DYNAMODB_AUDIT_TABLE=MediAssist-AuditLog
 LAMBDA_ROLE_ARN=arn:aws:iam::116671358608:role/MediAssist-Lambda-Role
 ACCOUNT_ID=116671358608
-API_URL=https://6degr53hp8.execute-api.us-east-1.amazonaws.com/prod
-DEPLOYMENT_DATE="Wed Mar  4 16:43:02 IST 2026"
+API_URL=https://68nnaciiv6.execute-api.ap-south-1.amazonaws.com/prod
+EC2_PUBLIC_IP=3.109.55.138
+OLLAMA_ENDPOINT=http://3.109.55.138:11434
+OLLAMA_MODEL=llama3.2:3b
+DEPLOYMENT_DATE=Fri Mar  6 01:49:09 IST 2026
