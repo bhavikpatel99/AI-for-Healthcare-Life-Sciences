@@ -4,190 +4,203 @@ import boto3
 import logging
 import uuid
 import base64
-from io import BytesIO
+import re
 from datetime import datetime, timezone
-from cgi import FieldStorage
 
 LOCAL = False if "AWS_LAMBDA_FUNCTION_NAME" in os.environ else True
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
-dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
-s3 = boto3.client('s3', region_name='us-east-1')
+dynamodb   = boto3.resource('dynamodb', region_name=os.environ.get('AWS_REGION', 'ap-south-1'))
+s3         = boto3.client('s3',         region_name=os.environ.get('AWS_REGION', 'ap-south-1'))
+lambda_cli = boto3.client('lambda',     region_name=os.environ.get('AWS_REGION', 'ap-south-1'))
 
-AUDIT_TABLE = os.environ.get('AUDIT_TABLE', 'MediAssist-AuditLog')
-RESULTS_TABLE = os.environ.get('RESULTS_TABLE', 'MediAssist-Results')
-S3_BUCKET = os.environ.get('S3_BUCKET', 'mediassist-documents')
+AUDIT_TABLE     = os.environ.get('AUDIT_TABLE',     'MediAssist-AuditLog')
+RESULTS_TABLE   = os.environ.get('RESULTS_TABLE',   'MediAssist-Results')
+S3_BUCKET       = os.environ.get('DOCS_BUCKET',     'mediassistai-documents')
+WORKER_FUNCTION = os.environ.get('WORKER_FUNCTION', 'MediAssist-Worker')
 
-MODEL_ID = 'anthropic.claude-3-haiku-20240307-v1:0'
 
-
-# ---------------- MAIN HANDLER ----------------
+# ------------------------------------------------
+# MAIN HANDLER — returns doc_id instantly (<1s)
+# ------------------------------------------------
 
 def lambda_handler(event, context):
 
     headers = {
-        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Origin':  '*',
         'Access-Control-Allow-Headers': '*',
         'Access-Control-Allow-Methods': 'OPTIONS,POST',
         'Content-Type': 'application/json'
     }
 
-    # Handle CORS preflight
     if not LOCAL and event.get('requestContext', {}).get('http', {}).get('method') == 'OPTIONS':
         return {'statusCode': 200, 'headers': headers, 'body': ''}
 
     try:
 
         # --------- INPUT HANDLING ---------
-
         if LOCAL:
-            body = event
+            body          = event
             document_text = body.get('text', '')[:8000]
-            filename = body.get('filename', 'unknown')
-
+            filename      = body.get('filename', 'unknown')
         else:
-            content_type = event['headers'].get('content-type') or event['headers'].get('Content-Type')
+            content_type = (
+                event.get('headers', {}).get('content-type') or
+                event.get('headers', {}).get('Content-Type', '')
+            )
+            logger.info(f"Content-Type: {content_type}")
 
-            # FORM DATA (React Upload)
-            if content_type and "multipart/form-data" in content_type:
-
-                decoded_body = base64.b64decode(event["body"])
-
-                environ = {
-                    'REQUEST_METHOD': 'POST',
-                    'CONTENT_TYPE': content_type,
-                    'CONTENT_LENGTH': str(len(decoded_body))
-                }
-
-                fp = BytesIO(decoded_body)
-                form = FieldStorage(fp=fp, environ=environ)
-
-                uploaded_file = form['file']
-
-                filename = uploaded_file.filename
-                document_text = uploaded_file.file.read().decode('utf-8', errors='ignore')[:8000]
-
-            # JSON fallback
+            if content_type and 'multipart/form-data' in content_type:
+                document_text, filename = parse_multipart(
+                    event['body'],
+                    content_type,
+                    event.get('isBase64Encoded', False)
+                )
             else:
-                body = json.loads(event.get('body', '{}'))
+                raw_body      = event.get('body', '{}') or '{}'
+                body          = json.loads(raw_body)
                 document_text = body.get('text', '')[:8000]
-                filename = body.get('filename', 'unknown')
+                filename      = body.get('filename', 'unknown')
 
-        if not document_text:
-            return response(400, {"error": "No document text provided"}, headers)
+        if not document_text.strip():
+            return build_response(400, {'error': 'No document text provided'}, headers)
 
-        # --------- PROCESS ---------
-
+        # --------- SAVE TO S3 + DYNAMO (fast) ---------
         doc_id = str(uuid.uuid4())
-
         s3_key = upload_to_s3(doc_id, document_text, filename)
-        log_audit(doc_id, "S3_UPLOAD", f"Stored in S3: {s3_key}")
 
-        ai_result = invoke_bedrock(document_text)
+        # Save PROCESSING status immediately so frontend can poll
+        save_pending(doc_id, filename, s3_key)
+        log_audit(doc_id, 'RECEIVED', f'Document received: {filename}')
 
-        store_result(doc_id, filename, ai_result, s3_key)
-        log_audit(doc_id, "GENERATE", "AI summary generated")
+        # --------- TRIGGER WORKER ASYNC (no wait) ---------
+        lambda_cli.invoke(
+            FunctionName=WORKER_FUNCTION,
+            InvocationType='Event',          # ← async fire-and-forget
+            Payload=json.dumps({
+                'doc_id':        doc_id,
+                'filename':      filename,
+                's3_key':        s3_key,
+                'document_text': document_text
+            }).encode('utf-8')
+        )
 
-        return response(200, {
-            "doc_id": doc_id,
-            **ai_result
+        logger.info(f"Worker triggered async for doc_id={doc_id}")
+
+        # --------- RETURN INSTANTLY (<1s) ---------
+        return build_response(202, {
+            'doc_id':  doc_id,
+            'status':  'PROCESSING',
+            'message': 'Document received. Poll /status?doc_id=' + doc_id
         }, headers)
 
     except Exception as e:
-        logger.error(f"ERROR: {str(e)}")
-        return response(500, {"error": str(e)}, headers)
+        logger.error(f'ERROR: {str(e)}', exc_info=True)
+        return build_response(500, {'error': str(e)}, headers)
 
 
-# ---------------- S3 ----------------
+# ------------------------------------------------
+# Multipart parser
+# ------------------------------------------------
+
+def parse_multipart(body_raw, content_type, is_base64):
+    if is_base64:
+        body_bytes = base64.b64decode(body_raw)
+    else:
+        body_bytes = body_raw.encode('utf-8') if isinstance(body_raw, str) else body_raw
+
+    boundary_match = re.search(r'boundary=([^\s;]+)', content_type)
+    if not boundary_match:
+        raise ValueError(f'Cannot find boundary in Content-Type: {content_type}')
+
+    boundary  = boundary_match.group(1).strip('"')
+    delimiter = f'--{boundary}'.encode()
+    parts     = body_bytes.split(delimiter)
+
+    filename      = 'unknown'
+    document_text = ''
+
+    for part in parts:
+        if b'Content-Disposition' not in part:
+            continue
+        if b'\r\n\r\n' in part:
+            header_section, file_body = part.split(b'\r\n\r\n', 1)
+        elif b'\n\n' in part:
+            header_section, file_body = part.split(b'\n\n', 1)
+        else:
+            continue
+
+        headers_text = header_section.decode('utf-8', errors='ignore')
+        if 'name="file"' not in headers_text:
+            continue
+
+        fn_match = re.search(r'filename="([^"]+)"', headers_text)
+        if fn_match:
+            filename = fn_match.group(1)
+
+        file_body     = file_body.rstrip(b'\r\n--')
+        document_text = file_body.decode('utf-8', errors='ignore')[:8000]
+        break
+
+    if not document_text:
+        raise ValueError('No file content found in multipart form data')
+
+    return document_text, filename
+
+
+# ------------------------------------------------
+# S3
+# ------------------------------------------------
 
 def upload_to_s3(doc_id, text, filename):
-    key = f"uploads/{doc_id}_{filename}.txt"
-
+    key = f'uploads/{doc_id}_{filename}.txt'
     s3.put_object(
         Bucket=S3_BUCKET,
         Key=key,
-        Body=text.encode("utf-8"),
-        ContentType="text/plain"
+        Body=text.encode('utf-8'),
+        ContentType='text/plain'
     )
-
     return key
 
 
-# ---------------- BEDROCK ----------------
+# ------------------------------------------------
+# DynamoDB
+# ------------------------------------------------
 
-def invoke_bedrock(text):
-
-    prompt = f"""
-Summarize this clinical document.
-
-Return ONLY JSON:
-professional_summary
-patient_explanation
-confidence_score
-disclaimer
-
-{text}
-"""
-
-    response = bedrock.invoke_model(
-        modelId=MODEL_ID,
-        body=json.dumps({
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": prompt}]
-        }),
-        contentType="application/json",
-        accept="application/json"
-    )
-
-    result = json.loads(response['body'].read())
-    content = result['content'][0]['text']
-
-    return json.loads(content)
-
-
-# ---------------- DYNAMODB ----------------
-
-def store_result(doc_id, filename, result, s3_key):
-
+def save_pending(doc_id, filename, s3_key):
+    """Save PROCESSING status immediately so frontend can start polling."""
     table = dynamodb.Table(RESULTS_TABLE)
-
     table.put_item(Item={
-        "doc_id": doc_id,
-        "filename": filename,
-        "s3_key": s3_key,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "professional_summary": result["professional_summary"],
-        "patient_explanation": result["patient_explanation"],
-        "confidence_score": result["confidence_score"],
-        "disclaimer": result["disclaimer"],
-        "status": "PENDING"
+        'doc_id':    doc_id,
+        'filename':  filename,
+        's3_key':    s3_key,
+        'status':    'PROCESSING',
+        'timestamp': datetime.now(timezone.utc).isoformat()
     })
 
 
 def log_audit(doc_id, event_type, detail):
-
     table = dynamodb.Table(AUDIT_TABLE)
-
     table.put_item(Item={
-        "event_id": str(uuid.uuid4()),
-        "doc_id": doc_id,
-        "event_type": event_type,
-        "detail": detail,
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        'event_id':   str(uuid.uuid4()),
+        'doc_id':     doc_id,
+        'event_type': event_type,
+        'detail':     detail,
+        'timestamp':  datetime.now(timezone.utc).isoformat()
     })
 
 
-# ---------------- RESPONSE ----------------
+# ------------------------------------------------
+# Response
+# ------------------------------------------------
 
-def response(code, body, headers):
+def build_response(code, body, headers):
     if LOCAL:
         return body
     return {
         'statusCode': code,
-        'headers': headers,
-        'body': json.dumps(body)
+        'headers':    headers,
+        'body':       json.dumps(body)
     }
