@@ -3,6 +3,10 @@ import { useApp } from "../context/AppContext";
 const ExportPanel = () => {
   const { aiResult, auditLog, resetAll } = useApp();
 
+  // ✅ Fix: confidence_score is now "High/Medium/Low" not numeric
+  // Old: `${aiResult.confidence_score}/100` → showed "High/100" ❌
+  const confidenceLabel = aiResult?.confidence_score ?? "N/A";
+
   function exportSummary() {
     if (!aiResult) {
       alert("No result available to export");
@@ -11,13 +15,16 @@ const ExportPanel = () => {
 
     const content = `MEDIASSIST AI — CLINICAL SUMMARY EXPORT
 Generated: ${new Date().toISOString()}
-Confidence Score: ${aiResult.confidence_score}/100
+Confidence Score: ${confidenceLabel}
 
 PROFESSIONAL SUMMARY:
 ${aiResult.professional_summary}
 
 PATIENT EXPLANATION:
 ${aiResult.patient_explanation}
+
+DISCLAIMER:
+${aiResult.disclaimer}
 
 AUDIT LOG:
 ${auditLog.map((e) => `[${e.time}] ${e.type}: ${e.detail}`).join("\n")}
@@ -27,9 +34,9 @@ AI-Assisted. Not a diagnostic tool. Requires professional validation.
 MediAssist AI · Team Cyber Scorpion`;
 
     const blob = new Blob([content], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
     a.download = "mediassist-summary.txt";
     a.click();
     URL.revokeObjectURL(url);
@@ -40,14 +47,15 @@ MediAssist AI · Team Cyber Scorpion`;
 
     const output = {
       metadata: {
-        timestamp: new Date().toISOString(),
-        confidence: aiResult.confidence_score,
-        status: "APPROVED",
+        timestamp:  new Date().toISOString(),
+        confidence: confidenceLabel,
+        status:     "APPROVED",
+        doc_id:     aiResult.doc_id ?? null,
       },
       professional_summary: aiResult.professional_summary,
-      patient_explanation: aiResult.patient_explanation,
-      disclaimer: aiResult.disclaimer,
-      audit_log: auditLog,
+      patient_explanation:  aiResult.patient_explanation,
+      disclaimer:           aiResult.disclaimer,
+      audit_log:            auditLog,
     };
 
     try {
@@ -62,29 +70,41 @@ MediAssist AI · Team Cyber Scorpion`;
   return (
     <div className="panel active">
       <div className="card">
-        <div className="card-title">Export & Audit Trail</div>
+        <div className="card-title">Export &amp; Audit Trail</div>
         <div className="card-subtitle">
           The document has been approved. Export summaries and review the
           complete audit log.
         </div>
 
+        {/* Approved patient explanation */}
         <div className="patient-card" style={{ marginBottom: 20 }}>
           <div className="patient-card-title">
             🏥 Patient Explanation
-            <span
-              style={{
-                fontSize: 13,
-                fontWeight: 400,
-                color: "var(--green)",
-                marginLeft: 8,
-              }}
-            >
+            <span style={{
+              fontSize: 13, fontWeight: 400,
+              color: "var(--green)", marginLeft: 8
+            }}>
               ✅ Approved for Sharing
             </span>
           </div>
           <div className="patient-text">{aiResult?.patient_explanation}</div>
         </div>
 
+        {/* Confidence badge */}
+        <div className="full-width-section" style={{ marginBottom: 20 }}>
+          <div className="result-section-title" style={{ marginBottom: 8 }}>
+            Confidence Score
+          </div>
+          <div className="confidence-ring">
+            <span className={`conf-dot ${
+              confidenceLabel === "High"   ? "conf-high" :
+              confidenceLabel === "Medium" ? "conf-med"  : "conf-low"
+            }`} />
+            {confidenceLabel}
+          </div>
+        </div>
+
+        {/* Export options */}
         <div className="full-width-section" style={{ marginBottom: 20 }}>
           <div className="result-section-title" style={{ marginBottom: 16 }}>
             Export Options
@@ -96,29 +116,33 @@ MediAssist AI · Team Cyber Scorpion`;
             <button className="btn btn-secondary" onClick={copyJSON}>
               📋 Copy JSON Output
             </button>
-            <button
-              className="btn btn-secondary"
-              onClick={() => window.print()}
-            >
+            <button className="btn btn-secondary" onClick={() => window.print()}>
               🖨 Print Audit Log
             </button>
           </div>
         </div>
 
+        {/* Audit trail */}
         <div className="full-width-section">
           <div className="result-section-title" style={{ marginBottom: 16 }}>
             Full Audit Trail
           </div>
           <div className="audit-log">
-            {auditLog.map((entry, i) => (
-              <div key={i} className="audit-entry">
-                <span className={`audit-type audit-${entry.type}`}>
-                  {entry.type}
-                </span>
-                <span className="audit-detail">{entry.detail}</span>
-                <span className="audit-time">{entry.time}</span>
+            {auditLog.length === 0 ? (
+              <div style={{ color: "var(--text-dim)", fontSize: 13 }}>
+                No audit entries yet.
               </div>
-            ))}
+            ) : (
+              auditLog.map((entry, i) => (
+                <div key={i} className="audit-entry">
+                  <span className={`audit-type audit-${entry.type}`}>
+                    {entry.type}
+                  </span>
+                  <span className="audit-detail">{entry.detail}</span>
+                  <span className="audit-time">{entry.time}</span>
+                </div>
+              ))
+            )}
           </div>
         </div>
 

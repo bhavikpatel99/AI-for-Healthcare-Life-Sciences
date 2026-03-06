@@ -13,9 +13,11 @@ const UploadPanel = () => {
     getDemoResult,
     API_BASE_URL,
   } = useApp();
-  const [dragOver, setDragOver] = useState(false);
-  const [consent, setConsent] = useState(false);
-  const [error, setError] = useState("");
+
+  const [dragOver,    setDragOver]    = useState(false);
+  const [consent,     setConsent]     = useState(false);
+  const [error,       setError]       = useState("");
+  const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef();
 
   function handleFile(f) {
@@ -24,9 +26,10 @@ const UploadPanel = () => {
       "application/pdf",
       "text/plain",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "image/jpeg", "image/png", "image/tiff", "image/bmp", "image/webp",
     ];
-    if (!validTypes.includes(f.type) && !f.name.match(/\.(pdf|txt|docx)$/i)) {
-      setError("Only PDF, TXT, and DOCX files are allowed.");
+    if (!validTypes.includes(f.type) && !f.name.match(/\.(pdf|txt|docx|jpg|jpeg|png|tiff|tif|bmp|webp)$/i)) {
+      setError("Allowed formats: PDF, TXT, DOCX, JPG, PNG, TIFF, BMP, WEBP");
       return;
     }
     if (f.size > 10 * 1024 * 1024) {
@@ -44,12 +47,13 @@ const UploadPanel = () => {
 
   async function startProcessing() {
     if (!file) return;
-    setCurrentStep(2);
-    addAudit(
-      "UPLOAD",
-      `File uploaded: ${file.name} (${formatSize(file.size)})`,
-    );
 
+    setIsUploading(true);
+    setError("");
+
+    addAudit("UPLOAD", `File uploaded: ${file.name} (${formatSize(file.size)})`);
+
+    // Extract text locally (for TXT files only — others processed server-side)
     let text = "";
     if (file.type === "text/plain") {
       text = await file.text();
@@ -57,39 +61,41 @@ const UploadPanel = () => {
       text = `Document: ${file.name}\n[Binary content — processed server-side]`;
     }
     setExtractedText(text);
-    setTimeout(async () => {
-      try {
-        const formData = new FormData();
-        formData.append("file", file);
 
-        const response = await fetch(`${API_BASE_URL}/process`, {
-          method: "POST",
-          body: formData,
-        });
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
 
-        if (!response.ok) throw new Error("API error");
+      const response = await fetch(`${API_BASE_URL}/process`, {
+        method: "POST",
+        body: formData,
+      });
 
-        const result = await response.json();
-        setAiResult(result);
+      if (!response.ok) throw new Error(`API error (${response.status})`);
 
-        addAudit(
-          "GENERATE",
-          `AI summary generated. Confidence: ${result.confidence_score}/100`,
-        );
-      } catch (err) {
-        console.error("Upload failed:", err);
+      const result = await response.json();
 
-        const demo = getDemoResult();
-        setAiResult(demo);
+      // ✅ Fix 1: Removed setTimeout(6000) — no artificial wait needed
+      // process now returns instantly with {doc_id, status:"PROCESSING"}
+      // ReviewPanel handles the polling from here
+      setAiResult(result);
+      addAudit("SUBMIT", `Document sent for AI processing. doc_id: ${result.doc_id}`);
 
-        addAudit(
-          "GENERATE",
-          `AI summary generated. Confidence: ${demo.confidence_score}/100`,
-        );
-      }
+      // ✅ Fix 2: Move to ReviewPanel immediately — it will show loading spinner
+      setCurrentStep(3);
 
-      setTimeout(() => setCurrentStep(3), 500);
-    }, 6000);
+    } catch (err) {
+      console.error("Upload failed:", err);
+
+      // ✅ Fix 3: Demo fallback uses "High" not 82 — matches backend format
+      const demo = getDemoResult();
+      setAiResult(demo);
+      addAudit("GENERATE", `Demo mode — AI summary generated. Confidence: ${demo.confidence_score}`);
+      setCurrentStep(3);
+
+    } finally {
+      setIsUploading(false);
+    }
   }
 
   return (
@@ -103,10 +109,7 @@ const UploadPanel = () => {
 
         <div
           className={`upload-zone ${dragOver ? "drag-over" : ""}`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={(e) => {
             e.preventDefault();
@@ -118,7 +121,7 @@ const UploadPanel = () => {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,.txt,.docx"
+            accept=".pdf,.txt,.docx,.jpg,.jpeg,.png,.tiff,.tif,.bmp,.webp"
             style={{ display: "none" }}
             onChange={(e) => handleFile(e.target.files[0])}
           />
@@ -129,6 +132,8 @@ const UploadPanel = () => {
             <span className="upload-limit-tag">PDF</span>
             <span className="upload-limit-tag">TXT</span>
             <span className="upload-limit-tag">DOCX</span>
+            <span className="upload-limit-tag">JPG</span>
+            <span className="upload-limit-tag">PNG</span>
             <span className="upload-limit-tag">Max 10MB</span>
           </div>
         </div>
@@ -148,10 +153,7 @@ const UploadPanel = () => {
             </div>
             <button
               className="file-remove"
-              onClick={(e) => {
-                e.stopPropagation();
-                removeFile();
-              }}
+              onClick={(e) => { e.stopPropagation(); removeFile(); }}
             >
               ✕
             </button>
@@ -183,10 +185,10 @@ const UploadPanel = () => {
         <div className="btn-row">
           <button
             className="btn btn-primary"
-            disabled={!file || !consent}
+            disabled={!file || !consent || isUploading}
             onClick={startProcessing}
           >
-            🚀 Process Document
+            {isUploading ? "⏳ Uploading..." : "🚀 Process Document"}
           </button>
         </div>
       </div>

@@ -1,0 +1,172 @@
+{
+  "widgets": [
+    {
+      "type": "text",
+      "x": 0, "y": 0, "width": 24, "height": 1,
+      "properties": {
+        "markdown": "# MediAssist AI — Live Monitor | Team Cyber Scorpion"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 1, "width": 8, "height": 6,
+      "properties": {
+        "title": "Invocations (All Functions)",
+        "view": "timeSeries",
+        "stat": "Sum",
+        "period": 60,
+        "region": "ap-south-1",
+        "annotations": { "horizontal": [] },
+        "metrics": [
+          ["AWS/Lambda", "Invocations", "FunctionName", "MediAssist-Process", {"label": "Process"}],
+          ["AWS/Lambda", "Invocations", "FunctionName", "MediAssist-Worker",  {"label": "Worker"}],
+          ["AWS/Lambda", "Invocations", "FunctionName", "MediAssist-Status",  {"label": "Status"}],
+          ["AWS/Lambda", "Invocations", "FunctionName", "MediAssist-Approve", {"label": "Approve"}],
+          ["AWS/Lambda", "Invocations", "FunctionName", "MediAssist-Audit",   {"label": "Audit"}]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8, "y": 1, "width": 8, "height": 6,
+      "properties": {
+        "title": "Errors (All Functions)",
+        "view": "timeSeries",
+        "stat": "Sum",
+        "period": 60,
+        "region": "ap-south-1",
+        "annotations": { "horizontal": [] },
+        "metrics": [
+          ["AWS/Lambda", "Errors", "FunctionName", "MediAssist-Process", {"label": "Process", "color": "#d62728"}],
+          ["AWS/Lambda", "Errors", "FunctionName", "MediAssist-Worker",  {"label": "Worker",  "color": "#ff7f0e"}],
+          ["AWS/Lambda", "Errors", "FunctionName", "MediAssist-Status",  {"label": "Status",  "color": "#9467bd"}],
+          ["AWS/Lambda", "Errors", "FunctionName", "MediAssist-Approve", {"label": "Approve", "color": "#8c564b"}],
+          ["AWS/Lambda", "Errors", "FunctionName", "MediAssist-Audit",   {"label": "Audit",   "color": "#e377c2"}]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16, "y": 1, "width": 8, "height": 6,
+      "properties": {
+        "title": "Duration (ms)",
+        "view": "timeSeries",
+        "stat": "Average",
+        "period": 60,
+        "region": "ap-south-1",
+        "annotations": { "horizontal": [] },
+        "metrics": [
+          ["AWS/Lambda", "Duration", "FunctionName", "MediAssist-Process", {"label": "Process"}],
+          ["AWS/Lambda", "Duration", "FunctionName", "MediAssist-Worker",  {"label": "Worker (Ollama)"}],
+          ["AWS/Lambda", "Duration", "FunctionName", "MediAssist-Status",  {"label": "Status"}]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 7, "width": 8, "height": 6,
+      "properties": {
+        "title": "Worker Ollama Processing Time",
+        "view": "timeSeries",
+        "stat": "Maximum",
+        "period": 60,
+        "region": "ap-south-1",
+        "annotations": {
+          "horizontal": [
+            {"label": "30s warning", "value": 30000, "color": "#ffbb00"},
+            {"label": "300s limit",  "value": 300000, "color": "#d62728"}
+          ]
+        },
+        "metrics": [
+          ["AWS/Lambda", "Duration", "FunctionName", "MediAssist-Worker", {"label": "Max Duration (ms)", "color": "#ff7f0e"}]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8, "y": 7, "width": 8, "height": 6,
+      "properties": {
+        "title": "Throttles",
+        "view": "timeSeries",
+        "stat": "Sum",
+        "period": 60,
+        "region": "ap-south-1",
+        "annotations": { "horizontal": [] },
+        "metrics": [
+          ["AWS/Lambda", "Throttles", "FunctionName", "MediAssist-Process", {"label": "Process"}],
+          ["AWS/Lambda", "Throttles", "FunctionName", "MediAssist-Worker",  {"label": "Worker"}],
+          ["AWS/Lambda", "Throttles", "FunctionName", "MediAssist-Status",  {"label": "Status"}]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16, "y": 7, "width": 8, "height": 6,
+      "properties": {
+        "title": "DynamoDB Read/Write Capacity",
+        "view": "timeSeries",
+        "stat": "Sum",
+        "period": 60,
+        "region": "ap-south-1",
+        "annotations": { "horizontal": [] },
+        "metrics": [
+          ["AWS/DynamoDB", "ConsumedWriteCapacityUnits", "TableName", "MediAssist-Results",  {"label": "Results Writes"}],
+          ["AWS/DynamoDB", "ConsumedReadCapacityUnits",  "TableName", "MediAssist-Results",  {"label": "Results Reads"}],
+          ["AWS/DynamoDB", "ConsumedWriteCapacityUnits", "TableName", "MediAssist-AuditLog", {"label": "Audit Writes"}]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 13, "width": 8, "height": 6,
+      "properties": {
+        "title": "Concurrent Executions",
+        "view": "timeSeries",
+        "stat": "Maximum",
+        "period": 60,
+        "region": "ap-south-1",
+        "annotations": { "horizontal": [] },
+        "metrics": [
+          ["AWS/Lambda", "ConcurrentExecutions", "FunctionName", "MediAssist-Process", {"label": "Process"}],
+          ["AWS/Lambda", "ConcurrentExecutions", "FunctionName", "MediAssist-Worker",  {"label": "Worker"}],
+          ["AWS/Lambda", "ConcurrentExecutions", "FunctionName", "MediAssist-Status",  {"label": "Status"}]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8, "y": 13, "width": 8, "height": 6,
+      "properties": {
+        "title": "S3 Total Documents",
+        "view": "timeSeries",
+        "stat": "Sum",
+        "period": 3600,
+        "region": "ap-south-1",
+        "annotations": { "horizontal": [] },
+        "metrics": [
+          ["AWS/S3", "NumberOfObjects", "BucketName", "mediassistai-documents", "StorageType", "AllStorageTypes", {"label": "Total Documents"}]
+        ]
+      }
+    },
+    {
+      "type": "log",
+      "x": 0, "y": 19, "width": 12, "height": 6,
+      "properties": {
+        "title": "Worker Errors (Live)",
+        "query": "SOURCE '/aws/lambda/MediAssist-Worker' | fields @timestamp, @message | filter @message like /ERROR|Exception|Error/ | sort @timestamp desc | limit 20",
+        "region": "ap-south-1",
+        "view": "table"
+      }
+    },
+    {
+      "type": "log",
+      "x": 12, "y": 19, "width": 12, "height": 6,
+      "properties": {
+        "title": "Process Lambda Recent Activity",
+        "query": "SOURCE '/aws/lambda/MediAssist-Process' | fields @timestamp, @message | filter @message like /doc_id|Worker triggered|ERROR/ | sort @timestamp desc | limit 20",
+        "region": "ap-south-1",
+        "view": "table"
+      }
+    }
+  ]
+}

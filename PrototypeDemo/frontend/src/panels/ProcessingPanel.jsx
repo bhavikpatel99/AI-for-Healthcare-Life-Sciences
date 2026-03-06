@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import { useApp } from "../context/AppContext";
 
+// ✅ Fix 1: Reduced to 3 steps — step 2 now only lasts ~1s (just the upload)
+// Old: 6 fake steps over 4.5s — panel was cut off before finishing
+// New: 3 fast steps over 1.2s — completes cleanly before step 3 kicks in
 const loadingSteps = [
   "Uploading to secure storage…",
-  "Extracting text content…",
-  "Analyzing clinical terminology…",
-  "Generating professional summary…",
-  "Creating patient-friendly explanation…",
-  "Calculating confidence score…",
+  "Validating document content…",
+  "Sending to AI for analysis…",
 ];
 
 const ProcessingPanel = () => {
@@ -19,24 +19,29 @@ const ProcessingPanel = () => {
 
     setActiveStep(0);
 
-    const delays = [0, 600, 1200, 1900, 2700, 4500];
+    // ✅ Fix 2: Fast delays — match real upload time (~1s)
+    const delays = [0, 400, 800];
     const timers = delays.map((delay, i) =>
-      setTimeout(() => setActiveStep(i), delay),
+      setTimeout(() => setActiveStep(i), delay)
     );
 
     return () => timers.forEach(clearTimeout);
   }, [currentStep]);
 
+  if (currentStep !== 2) return null;
+
   return (
     <div className="panel active">
       <div className="card">
-        <div className="card-title">AI Processing</div>
+        <div className="card-title">Uploading Document</div>
         <div className="card-subtitle">
-          Please wait while MediAssist AI analyzes your document…
+          Securely uploading your document for AI analysis…
         </div>
+
         <div className="loading-overlay active">
           <div className="spinner"></div>
-          <div className="loading-text">Analyzing document…</div>
+          <div className="loading-text">Uploading…</div>
+
           <div className="loading-steps">
             {loadingSteps.map((label, i) => (
               <div
@@ -47,6 +52,16 @@ const ProcessingPanel = () => {
                 {label}
               </div>
             ))}
+          </div>
+
+          {/* ✅ Fix 3: Inform user AI processing happens on next screen */}
+          <div style={{
+            marginTop: 24,
+            fontSize: 12,
+            color: "var(--text-dim)",
+            textAlign: "center"
+          }}>
+            AI analysis will begin on the next screen
           </div>
         </div>
       </div>

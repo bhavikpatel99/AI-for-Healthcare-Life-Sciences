@@ -31,14 +31,24 @@ export function AppProvider({ children }) {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
   }
 
+  // function getDemoResult() {
+  //   return {
+  //     professional_summary: "Demo summary...",
+  //     patient_explanation: "Demo explanation...",
+  //     confidence_score: 82,
+  //     disclaimer: "AI demo output"
+  //   }
+  // }
   function getDemoResult() {
-    return {
-      professional_summary: "Demo summary...",
-      patient_explanation: "Demo explanation...",
-      confidence_score: 82,
-      disclaimer: "AI demo output"
-    }
+  return {
+    doc_id: "demo-doc-id",
+    professional_summary: "Demo summary...",
+    patient_explanation: "Demo explanation...",
+    confidence_score: "High",    // ← change 82 to "High"
+    disclaimer: "AI demo output",
+    status: "PENDING"            // ← add status field
   }
+}
 
   function resetAll() {
     setFile(null)
