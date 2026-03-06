@@ -5,7 +5,22 @@ import logging
 import uuid
 import base64
 import re
+import io
 from datetime import datetime, timezone
+
+# ✅ PDF support
+try:
+    import PyPDF2
+    PDF_SUPPORT = True
+except ImportError:
+    PDF_SUPPORT = False
+
+# ✅ DOCX support
+try:
+    import docx
+    DOCX_SUPPORT = True
+except ImportError:
+    DOCX_SUPPORT = False
 
 LOCAL = False if "AWS_LAMBDA_FUNCTION_NAME" in os.environ else True
 
@@ -15,11 +30,16 @@ logger.setLevel(logging.INFO)
 dynamodb   = boto3.resource('dynamodb', region_name=os.environ.get('AWS_REGION', 'ap-south-1'))
 s3         = boto3.client('s3',         region_name=os.environ.get('AWS_REGION', 'ap-south-1'))
 lambda_cli = boto3.client('lambda',     region_name=os.environ.get('AWS_REGION', 'ap-south-1'))
+textract   = boto3.client('textract',   region_name=os.environ.get('AWS_REGION', 'ap-south-1'))
 
 AUDIT_TABLE     = os.environ.get('AUDIT_TABLE',     'MediAssist-AuditLog')
 RESULTS_TABLE   = os.environ.get('RESULTS_TABLE',   'MediAssist-Results')
 S3_BUCKET       = os.environ.get('DOCS_BUCKET',     'mediassistai-documents')
 WORKER_FUNCTION = os.environ.get('WORKER_FUNCTION', 'MediAssist-Worker')
+
+# Supported image types
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.tiff', '.tif', '.bmp', '.webp'}
+IMAGE_MIME_TYPES  = {'image/jpeg', 'image/png', 'image/tiff', 'image/bmp', 'image/webp'}
 
 
 # ------------------------------------------------
@@ -65,20 +85,21 @@ def lambda_handler(event, context):
                 filename      = body.get('filename', 'unknown')
 
         if not document_text.strip():
-            return build_response(400, {'error': 'No document text provided'}, headers)
+            return build_response(400, {'error': 'No text could be extracted from the uploaded file'}, headers)
 
-        # --------- SAVE TO S3 + DYNAMO (fast) ---------
+        logger.info(f"Extracted {len(document_text)} chars from {filename}")
+
+        # --------- SAVE TO S3 + DYNAMO ---------
         doc_id = str(uuid.uuid4())
         s3_key = upload_to_s3(doc_id, document_text, filename)
 
-        # Save PROCESSING status immediately so frontend can poll
         save_pending(doc_id, filename, s3_key)
         log_audit(doc_id, 'RECEIVED', f'Document received: {filename}')
 
-        # --------- TRIGGER WORKER ASYNC (no wait) ---------
+        # --------- TRIGGER WORKER ASYNC ---------
         lambda_cli.invoke(
             FunctionName=WORKER_FUNCTION,
-            InvocationType='Event',          # ← async fire-and-forget
+            InvocationType='Event',
             Payload=json.dumps({
                 'doc_id':        doc_id,
                 'filename':      filename,
@@ -89,7 +110,6 @@ def lambda_handler(event, context):
 
         logger.info(f"Worker triggered async for doc_id={doc_id}")
 
-        # --------- RETURN INSTANTLY (<1s) ---------
         return build_response(202, {
             'doc_id':  doc_id,
             'status':  'PROCESSING',
@@ -102,7 +122,86 @@ def lambda_handler(event, context):
 
 
 # ------------------------------------------------
-# Multipart parser
+# PDF extraction — PyPDF2
+# ------------------------------------------------
+
+def extract_pdf_text(file_bytes):
+    if not PDF_SUPPORT:
+        raise ValueError("PyPDF2 not installed")
+
+    reader    = PyPDF2.PdfReader(io.BytesIO(file_bytes))
+    text_parts = []
+
+    logger.info(f"PDF has {len(reader.pages)} pages")
+    for i, page in enumerate(reader.pages):
+        try:
+            t = page.extract_text()
+            if t:
+                text_parts.append(t)
+        except Exception as e:
+            logger.warning(f"Skipping page {i}: {e}")
+
+    full_text = "\n".join(text_parts).strip()
+
+    if not full_text:
+        # Scanned PDF — fall back to Textract
+        logger.info("PDF has no text layer — falling back to Textract OCR")
+        return extract_image_text_textract(file_bytes)
+
+    return full_text[:8000]
+
+
+# ------------------------------------------------
+# Image OCR — Amazon Textract
+# ------------------------------------------------
+
+def extract_image_text_textract(file_bytes):
+    """Use Amazon Textract to OCR images and scanned PDFs."""
+    logger.info(f"Calling Textract on {len(file_bytes)} bytes")
+
+    response = textract.detect_document_text(
+        Document={'Bytes': file_bytes}
+    )
+
+    lines = [
+        block['Text']
+        for block in response.get('Blocks', [])
+        if block['BlockType'] == 'LINE'
+    ]
+
+    full_text = "\n".join(lines).strip()
+
+    if not full_text:
+        raise ValueError(
+            "No text could be detected in this image. "
+            "Please ensure the image is clear and contains readable text."
+        )
+
+    logger.info(f"Textract extracted {len(full_text)} chars")
+    return full_text[:8000]
+
+
+# ------------------------------------------------
+# DOCX extraction — python-docx
+# ------------------------------------------------
+
+def extract_docx_text(file_bytes):
+    if DOCX_SUPPORT:
+        doc        = docx.Document(io.BytesIO(file_bytes))
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        full_text  = "\n".join(paragraphs).strip()
+        if full_text:
+            return full_text[:8000]
+
+    # Fallback: regex on XML content
+    logger.warning("python-docx not available, using XML fallback")
+    raw          = file_bytes.decode('utf-8', errors='ignore')
+    text_matches = re.findall(r'<w:t[^>]*>([^<]+)</w:t>', raw)
+    return ' '.join(text_matches)[:8000]
+
+
+# ------------------------------------------------
+# Multipart parser — routes by file type
 # ------------------------------------------------
 
 def parse_multipart(body_raw, content_type, is_base64):
@@ -125,6 +224,7 @@ def parse_multipart(body_raw, content_type, is_base64):
     for part in parts:
         if b'Content-Disposition' not in part:
             continue
+
         if b'\r\n\r\n' in part:
             header_section, file_body = part.split(b'\r\n\r\n', 1)
         elif b'\n\n' in part:
@@ -140,12 +240,37 @@ def parse_multipart(body_raw, content_type, is_base64):
         if fn_match:
             filename = fn_match.group(1)
 
-        file_body     = file_body.rstrip(b'\r\n--')
-        document_text = file_body.decode('utf-8', errors='ignore')[:8000]
+        file_body = file_body.rstrip(b'\r\n--')
+        ext       = os.path.splitext(filename.lower())[1]
+
+        logger.info(f"Processing file: {filename} (ext={ext}, size={len(file_body)} bytes)")
+
+        # ✅ Route to correct extractor
+        if ext == '.pdf':
+            document_text = extract_pdf_text(file_body)
+
+        elif ext == '.docx':
+            document_text = extract_docx_text(file_body)
+
+        elif ext in IMAGE_EXTENSIONS:
+            document_text = extract_image_text_textract(file_body)
+
+        elif ext == '.txt':
+            document_text = file_body.decode('utf-8', errors='ignore')[:8000]
+
+        else:
+            # Unknown type — try plain text, fall back to Textract
+            try:
+                document_text = file_body.decode('utf-8', errors='ignore')[:8000]
+                if not document_text.strip():
+                    raise ValueError("Empty text")
+            except Exception:
+                document_text = extract_image_text_textract(file_body)
+
         break
 
-    if not document_text:
-        raise ValueError('No file content found in multipart form data')
+    if not document_text.strip():
+        raise ValueError('No text content could be extracted from the uploaded file')
 
     return document_text, filename
 
@@ -170,7 +295,6 @@ def upload_to_s3(doc_id, text, filename):
 # ------------------------------------------------
 
 def save_pending(doc_id, filename, s3_key):
-    """Save PROCESSING status immediately so frontend can start polling."""
     table = dynamodb.Table(RESULTS_TABLE)
     table.put_item(Item={
         'doc_id':    doc_id,
