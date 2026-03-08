@@ -1267,7 +1267,7 @@ Deletes all Lambda functions, API Gateway, DynamoDB tables, S3 buckets, and IAM 
 
 ## 📄 License
 
-MIT License — see [LICENSE](LICENSE) for details.
+MIT License — see [SECURITY.MD](LICENSE) for details.
 
 ---
 
@@ -1522,7 +1522,7 @@ Deletes all Lambda functions, API Gateway, DynamoDB tables, S3 buckets, and IAM 
 
 ## 📄 License
 
-MIT License — see [LICENSE](LICENSE) for details.
+MIT License — see for details open Security.md file.
 
 ---
 
