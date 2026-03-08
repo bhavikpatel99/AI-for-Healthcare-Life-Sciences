@@ -1,357 +1,256 @@
-# MediAssist AI - Healthcare Workflow Support System
+# 🏥 MediAssist AI — Healthcare Workflow Support System
 
-An AI-powered healthcare solution that processes synthetic clinical documents to generate professional summaries and patient-friendly explanations. Built with React, AWS Lambda, and Ollama LLM.
+> **AI for Bharat Hackathon 2026** | Team Cyber Scorpion | Healthcare & Life Sciences Track
 
-## Overview
+An AI-powered clinical document processing system that generates professional summaries and patient-friendly explanations — with full human-in-the-loop approval workflow.
 
-MediAssist AI is a prototype demonstration of responsible AI in healthcare, designed to:
+> ⚠️ **This system uses only synthetic data and is for demonstration purposes only. It does not provide medical diagnoses or treatment recommendations.**
 
-- Process clinical documents (PDF, DOCX, images, text) and extract medical information
-- Generate professional clinical summaries for healthcare providers
-- Create patient-friendly explanations of medical content
-- Maintain comprehensive audit trails for compliance
-- Support human-in-the-loop workflows with approval mechanisms
+---
 
-**Important**: This system uses only synthetic data and is designed for demonstration purposes. It does not provide medical diagnoses or treatment recommendations.
+## 🎯 Problem Statement
 
-## Architecture
+Healthcare professionals spend significant time summarizing complex clinical documents for patients. MediAssist AI automates this using local LLM inference — keeping data secure, reducing clinician workload, and improving patient understanding.
 
-### System Components
+---
+
+## 🏗️ Architecture
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Frontend      │───▶│   API Gateway   │───▶│  Lambda Layer   │
-│   (React)       │    │   (HTTP API)    │    │                 │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                                                        │
-                       ┌────────────────────────────────┼────────────────┐
-                       ▼                                ▼                ▼
-              ┌─────────────────┐          ┌─────────────────┐  ┌──────────────┐
-              │   DynamoDB      │          │   S3 Storage    │  │   Ollama     │
-              │   (3 Tables)    │          │   (Documents)   │  │   (EC2)      │
-              └─────────────────┘          └─────────────────┘  └──────────────┘
+┌─────────────────┐    ┌─────────────────┐    ┌──────────────────────┐
+│   React         │───▶│   API Gateway   │───▶│  MediAssist-Process  │ (30s)
+│   Frontend      │    │   (HTTP API)    │    │  Lambda              │
+└─────────────────┘    └─────────────────┘    └──────────┬───────────┘
+        │                                                 │ async invoke
+        │ polls /status every 5s                          ▼
+        │                                     ┌──────────────────────┐
+        │                                     │  MediAssist-Worker   │ (600s)
+        │                                     │  Lambda + Ollama     │
+        │                                     └──────────┬───────────┘
+        │                                                 │
+        ▼                                                 ▼
+┌─────────────────┐          ┌─────────────────┐  ┌──────────────┐
+│   DynamoDB      │◀─────────│   S3 Storage    │  │  Ollama LLM  │
+│   (3 Tables)    │          │   (Documents)   │  │  EC2 t3.large│
+└─────────────────┘          └─────────────────┘  └──────────────┘
 ```
 
-### Technology Stack
+### Why Async Pattern?
+API Gateway has a hard **29-second timeout**. Ollama on EC2 takes **60-90 seconds**. Solution: `Process` Lambda returns `doc_id` instantly, `Worker` Lambda runs Ollama in the background, frontend polls `/status` every 5 seconds.
+
+---
+
+## ✨ Features
+
+| Feature | Details |
+|---------|---------|
+| 📄 Multi-format upload | PDF, DOCX, TXT, JPG, PNG, TIFF, BMP, WebP |
+| 🔍 OCR support | Amazon Textract for scanned PDFs and images |
+| 🧠 AI summarization | llama3.2:3b via Ollama — professional + patient summaries |
+| 👨‍⚕️ Human review | Doctor can edit and approve before release |
+| 📋 Audit trail | Full compliance log for every action |
+| 📊 Monitoring | CloudWatch dashboard for all Lambda functions |
+| 🔒 Secure | IAM roles, S3 encryption, no real patient data |
+
+---
+
+## 🛠️ Technology Stack
 
 **Frontend**
-- React 19.2 with Vite
-- Bootstrap 5.3 & AdminLTE 4.0
-- Axios for API communication
-- TailwindCSS for styling
+- React 19.2 + Vite
+- TailwindCSS
+- Polling-based status updates (no WebSocket needed)
 
 **Backend**
-- AWS Lambda (Python 3.11)
-- Amazon API Gateway (HTTP API)
-- Amazon DynamoDB (3 tables)
-- Amazon S3 (document storage)
-- Amazon Textract (OCR for images/scanned PDFs)
-- Ollama LLM on EC2 (llama3.2:3b)
+- AWS Lambda (Python 3.11) — 5 functions
+- Amazon API Gateway (HTTP API v2)
+- Amazon DynamoDB (3 tables, PAY_PER_REQUEST)
+- Amazon S3 (document + frontend hosting)
+- Amazon Textract (OCR)
+- Ollama + llama3.2:3b on EC2 t3.large
 
-**Document Processing**
-- PyPDF2 for PDF extraction
-- python-docx for DOCX files
-- Amazon Textract for image OCR
+---
 
-## Features
-
-### Document Processing
-- Multi-format support: PDF, DOCX, TXT, images (JPG, PNG, TIFF, BMP, WebP)
-- OCR for scanned documents and images via Amazon Textract
-- Async processing pattern (no API Gateway timeout issues)
-- Real-time status polling
-
-### AI Capabilities
-- Clinical text summarization using Ollama LLM
-- Patient-friendly explanation generation
-- Confidence scoring for AI outputs
-- Safety filters to prevent diagnostic/treatment recommendations
-
-### Compliance & Audit
-- Comprehensive audit logging for all operations
-- Human-in-the-loop approval workflow
-- HIPAA-aligned practices (even with synthetic data)
-- Complete action trail for regulatory compliance
-
-### User Interface
-- Step-by-step workflow (Upload → Processing → Review → Export)
-- Real-time processing status updates
-- Professional dashboard for healthcare providers
-- Responsive design for desktop and mobile
-
-## Project Structure
+## 📁 Project Structure
 
 ```
 .
 ├── PrototypeDemo/
-│   ├── frontend/              # React application
-│   │   ├── src/
-│   │   │   ├── components/    # Reusable UI components
-│   │   │   ├── panels/        # Step-based workflow panels
-│   │   │   ├── context/       # React context for state management
-│   │   │   └── services/      # API integration layer
-│   │   ├── package.json
-│   │   └── vite.config.js
+│   ├── frontend/
+│   │   └── src/
+│   │       ├── panels/           # UploadPanel, ProcessingPanel, ReviewPanel, ExportPanel
+│   │       ├── context/          # AppContext — global state
+│   │       └── services/         # API calls
 │   │
 │   ├── backend/
-│   │   ├── lambda/            # AWS Lambda functions
-│   │   │   ├── process_document.py    # Document upload handler
-│   │   │   ├── process_worker.py      # AI processing worker
-│   │   │   ├── get_status.py          # Status polling endpoint
-│   │   │   ├── approve_document.py    # Approval workflow
-│   │   │   └── get_audit_log.py       # Audit trail retrieval
-│   │   └── requirements.txt
+│   │   └── lambda/
+│   │       ├── process_document.py   # Receives upload, triggers Worker async
+│   │       ├── process_worker.py     # Calls Ollama, updates DynamoDB
+│   │       ├── get_status.py         # Polled by frontend every 5s
+│   │       ├── approve_document.py   # Doctor approval workflow
+│   │       └── get_audit_log.py      # Compliance audit trail
 │   │
-│   └── infra/                 # Infrastructure & deployment
-│       ├── deploy.sh          # Main deployment script
-│       ├── deploy-frontend.sh # Frontend-only deployment
-│       ├── cleanup.sh         # Resource cleanup
-│       └── dashboard.json     # CloudWatch dashboard config
+│   └── infra/
+│       ├── deploy.sh             # Full deployment (S3 + DynamoDB + Lambda + API GW)
+│       ├── dashboard.json        # CloudWatch dashboard config
+│       └── setup_dashboard.sh    # Creates CloudWatch dashboard
 │
-├── design.md                  # Detailed architecture documentation
-├── requirements.md            # System requirements specification
-└── README.md                  # This file
+└── README.md
 ```
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js 18+ and npm
-- Python 3.11+
-- AWS CLI configured with appropriate credentials
-- AWS account with permissions for Lambda, API Gateway, S3, DynamoDB, Textract
-- EC2 instance running Ollama (or modify to use different LLM endpoint)
-
-### Installation
-
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd <project-directory>
-   ```
-
-2. **Install frontend dependencies**
-   ```bash
-   cd PrototypeDemo/frontend
-   npm install
-   ```
-
-3. **Install backend dependencies**
-   ```bash
-   cd ../backend
-   pip install -r requirements.txt
-   ```
-
-### Deployment
-
-#### Full AWS Deployment
-
-The deployment script automates the entire infrastructure setup:
-
-```bash
-cd PrototypeDemo/infra
-./deploy.sh
-```
-
-This script will:
-1. Create S3 buckets for documents and frontend hosting
-2. Create DynamoDB tables (Results, Users, AuditLog)
-3. Set up IAM roles and policies
-4. Package and deploy 5 Lambda functions
-5. Configure API Gateway with CORS
-6. Build and deploy the React frontend
-
-**Deployment outputs:**
-- API Gateway URL
-- Frontend URL (S3 static website)
-- Configuration saved to `deployment-config.txt`
-
-#### Frontend-Only Deployment
-
-To update just the frontend:
-
-```bash
-cd PrototypeDemo/infra
-./deploy-frontend.sh
-```
-
-### Local Development
-
-1. **Start the frontend development server**
-   ```bash
-   cd PrototypeDemo/frontend
-   npm run dev
-   ```
-
-2. **Configure environment variables**
-   
-   Create `.env` file in `frontend/` directory:
-   ```
-   VITE_API_BASE_URL=https://your-api-gateway-url.amazonaws.com/prod
-   ```
-
-3. **Access the application**
-   
-   Open http://localhost:5173 in your browser
-
-## API Endpoints
-
-### POST /process
-Upload and process a document
-- **Input**: Multipart form data with file
-- **Output**: `{ doc_id, status: "PROCESSING" }`
-- **Timeout**: 30s (returns immediately, processing continues async)
-
-### GET /status?doc_id={id}
-Poll for processing status
-- **Output**: `{ status, professional_summary, patient_explanation, ... }`
-- **Status values**: `PROCESSING`, `PENDING`, `APPROVED`, `REJECTED`
-
-### POST /approve
-Approve or reject AI-generated content
-- **Input**: `{ doc_id, action: "approve"|"reject", notes }`
-- **Output**: `{ status, message }`
-
-### GET /audit?doc_id={id}
-Retrieve audit log for a document
-- **Output**: `{ events: [...] }`
-
-## Lambda Functions
-
-### MediAssist-Process (30s timeout)
-- Receives document upload
-- Extracts text (PDF/DOCX/Image/Text)
-- Stores in S3 and DynamoDB
-- Triggers Worker async
-- Returns doc_id immediately
-
-### MediAssist-Worker (600s timeout)
-- Calls Ollama LLM for AI processing
-- Generates professional summary
-- Creates patient-friendly explanation
-- Updates DynamoDB with results
-- No API Gateway timeout issues
-
-### MediAssist-Status (30s timeout)
-- Polled by frontend every 3 seconds
-- Returns current processing status
-- Provides AI-generated content when ready
-
-### MediAssist-Approve (30s timeout)
-- Handles human review workflow
-- Updates document status
-- Logs approval/rejection in audit trail
-
-### MediAssist-Audit (30s timeout)
-- Retrieves complete audit log
-- Supports compliance tracking
-- Returns chronological event history
-
-## Configuration
-
-### AWS Resources
-
-**S3 Buckets:**
-- `mediassistai-documents` - Document storage
-- `mediassistai-frontend` - Static website hosting
-
-**DynamoDB Tables:**
-- `MediAssist-Results` - Processing results and status
-- `MediAssist-Users` - User management
-- `MediAssist-AuditLog` - Compliance audit trail
-
-**Lambda Functions:**
-- All functions use Python 3.11 runtime
-- Memory: 256-512 MB
-- Timeout: 30-600 seconds (depending on function)
-
-### Environment Variables
-
-Lambda functions use these environment variables:
-- `OLLAMA_ENDPOINT` - Ollama API endpoint
-- `OLLAMA_MODEL` - LLM model name (default: llama3.2:3b)
-- `RESULTS_TABLE` - DynamoDB results table name
-- `AUDIT_TABLE` - DynamoDB audit table name
-- `DOCS_BUCKET` - S3 bucket for documents
-- `WORKER_FUNCTION` - Worker Lambda function name
-
-## Cleanup
-
-To remove all AWS resources:
-
-```bash
-cd PrototypeDemo/infra
-./cleanup.sh
-```
-
-This will delete:
-- Lambda functions
-- API Gateway
-- DynamoDB tables
-- S3 buckets (including all objects)
-- IAM roles and policies
-
-## Limitations
-
-### Technical Limitations
-- Maximum document size: 32,000 tokens
-- Concurrent users: Up to 1,000 per deployment
-- Processing time: 30-60 seconds for complex documents
-- Language support: Initially English only
-
-### Clinical Limitations
-- **No diagnosis**: System cannot provide diagnostic opinions
-- **No treatment advice**: No therapeutic recommendations
-- **Synthetic data only**: Cannot process real patient information
-- **Professional judgment required**: Cannot replace healthcare expertise
-
-### Regulatory Scope
-- Designed for US healthcare regulations
-- Requires organizational AI adoption policies
-- Staff training on capabilities and limitations required
-
-## Security & Compliance
-
-- TLS 1.3 encryption for all data in transit
-- Data encrypted at rest in S3 and DynamoDB
-- Role-based access controls (IAM)
-- Comprehensive audit logging
-- HIPAA-aligned practices
-- No real patient data processing
-
-## Responsible AI
-
-This system implements responsible AI principles:
-
-- **Transparency**: Clear explanations for AI outputs with confidence scores
-- **Human oversight**: Healthcare professionals maintain final authority
-- **Safety constraints**: Prevents diagnostic/treatment recommendations
-- **Bias mitigation**: Regular evaluation for discriminatory outputs
-- **Continuous improvement**: Professional feedback improves system performance
-
-## Contributing
-
-This is a prototype demonstration project. For production use, additional considerations are required:
-
-- Enhanced security measures
-- Comprehensive testing and validation
-- Regulatory compliance verification
-- Clinical validation with healthcare professionals
-- Privacy impact assessments
-
-## License
-
-[Specify your license here]
-
-## Contact
-
-[Specify contact information here]
 
 ---
 
-**Version**: 1.0  
-**Last Updated**: March 2026  
-**Status**: Prototype Demonstration
+## 🚀 Getting Started
 
-**Disclaimer**: This system is for demonstration purposes only and uses synthetic data. It does not provide medical advice, diagnosis, or treatment recommendations. Always consult qualified healthcare professionals for medical decisions.
+### Prerequisites
+- Node.js 18+ and npm
+- Python 3.11+
+- AWS CLI configured (`aws configure`)
+- AWS account with Lambda, S3, DynamoDB, API Gateway, Textract permissions
+
+### Local Development
+
+```bash
+# 1. Install frontend dependencies
+cd PrototypeDemo/frontend
+npm install
+
+# 2. Set environment variable
+echo "VITE_API_BASE_URL=https://your-api-id.execute-api.ap-south-1.amazonaws.com/prod" > .env.local
+
+# 3. Run dev server
+npm run dev
+# → http://localhost:5173
+```
+
+### Full AWS Deployment
+
+```bash
+cd PrototypeDemo/infra
+bash deploy.sh
+```
+
+The script automatically:
+1. ✅ Checks Ollama is reachable on EC2
+2. ✅ Creates S3 buckets
+3. ✅ Creates DynamoDB tables
+4. ✅ Sets up IAM role + policies (S3, DynamoDB, Textract, Lambda invoke)
+5. ✅ Packages and deploys all 5 Lambda functions
+6. ✅ Configures API Gateway with CORS
+7. ✅ Builds and deploys React frontend
+
+### CloudWatch Dashboard
+
+```bash
+cd PrototypeDemo/infra
+bash setup_dashboard.sh
+```
+
+---
+
+## 📡 API Reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/process` | Upload document → returns `doc_id` instantly |
+| `GET` | `/status?doc_id=xxx` | Poll for AI result (call every 5s) |
+| `POST` | `/approve` | Doctor approves/edits summary |
+| `GET` | `/audit?doc_id=xxx` | Get full audit trail |
+
+### Example Flow
+
+```bash
+# 1. Upload document
+curl -X POST https://API_URL/process \
+  -F "file=@clinical_report.pdf"
+# → { "doc_id": "abc-123", "status": "PROCESSING" }
+
+# 2. Poll status (repeat until status != PROCESSING)
+curl https://API_URL/status?doc_id=abc-123
+# → { "status": "PENDING", "professional_summary": "...", "patient_explanation": "..." }
+
+# 3. Approve
+curl -X POST https://API_URL/approve \
+  -H "Content-Type: application/json" \
+  -d '{"doc_id": "abc-123", "reviewer_id": "dr_smith"}'
+```
+
+---
+
+## ⚙️ Lambda Functions
+
+| Function | Timeout | Memory | Purpose |
+|----------|---------|--------|---------|
+| MediAssist-Process | 30s | 512MB | Receives upload, triggers Worker async |
+| MediAssist-Worker | 600s | 512MB | Runs Ollama — no API GW timeout limit |
+| MediAssist-Status | 30s | 256MB | Polled by frontend every 5s |
+| MediAssist-Approve | 30s | 256MB | Human review + edit |
+| MediAssist-Audit | 30s | 256MB | Compliance log retrieval |
+
+---
+
+## 🔧 Environment Variables
+
+All Lambda functions share these environment variables (set automatically by `deploy.sh`):
+
+```
+OLLAMA_ENDPOINT=http://<EC2_IP>:11434
+OLLAMA_MODEL=llama3.2:3b
+RESULTS_TABLE=MediAssist-Results
+AUDIT_TABLE=MediAssist-AuditLog
+DOCS_BUCKET=mediassistai-documents
+WORKER_FUNCTION=MediAssist-Worker
+```
+
+---
+
+## 🧹 Cleanup
+
+```bash
+cd PrototypeDemo/infra
+bash cleanup.sh
+```
+
+Deletes all Lambda functions, API Gateway, DynamoDB tables, S3 buckets, and IAM roles.
+
+---
+
+## ⚠️ Limitations
+
+- **No real patient data** — synthetic/demo data only
+- **English only** — LLM optimised for English clinical text
+- **Not for diagnosis** — AI outputs require professional validation
+- **Demo scale** — not production-hardened
+
+---
+
+## 🤝 Responsible AI
+
+- **Human oversight** — doctors review and approve every AI output before release
+- **Transparency** — confidence scores shown for every summary
+- **Safety constraints** — LLM prompt explicitly prevents diagnostic recommendations
+- **Audit trail** — every action logged for compliance
+
+---
+
+## 👥 Team
+
+**Team Cyber Scorpion** | AI for Bharat Hackathon 2026
+
+| Role | Details |
+|------|---------|
+| Team Lead | Bhavik Patel |
+| Track | Healthcare & Life Sciences |
+| Hackathon | AI for Bharat (powered by AWS) |
+
+---
+
+## 📄 License
+
+MIT License — see [LICENSE](LICENSE) for details.
+
+---
+
+**Version**: 1.0 | **Last Updated**: March 2026 | **Status**: Hackathon Prototype
+
+> *MediAssist AI is a demonstration prototype. Always consult qualified healthcare professionals for medical decisions.*
