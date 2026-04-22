@@ -6,7 +6,7 @@
 
 set -e
 
-AWS_REGION="${AWS_REGION:-us-east-1}"
+AWS_REGION="${AWS_REGION:-ap-south-1}"
 
 echo "================================================"
 echo " MediAssist AI — Resource Cleanup Script"
@@ -77,13 +77,41 @@ done
 # Step 3: Delete IAM Role
 # ================================================
 echo "[3/5] Deleting IAM role..."
+
 if aws iam get-role --role-name "$IAM_ROLE" &>/dev/null; then
-    # Detach all policies first
-    POLICIES=$(aws iam list-attached-role-policies --role-name "$IAM_ROLE" --query 'AttachedPolicies[*].PolicyArn' --output text)
-    for policy in $POLICIES; do
-        aws iam detach-role-policy --role-name "$IAM_ROLE" --policy-arn "$policy"
+
+    echo "  Removing inline policies..."
+
+    INLINE_POLICIES=$(aws iam list-role-policies \
+        --role-name "$IAM_ROLE" \
+        --query 'PolicyNames[]' \
+        --output text)
+
+    for policy in $INLINE_POLICIES; do
+        aws iam delete-role-policy \
+            --role-name "$IAM_ROLE" \
+            --policy-name "$policy"
+        echo "    ✓ Removed inline policy: $policy"
     done
+
+    echo "  Detaching managed policies..."
+
+    ATTACHED_POLICIES=$(aws iam list-attached-role-policies \
+        --role-name "$IAM_ROLE" \
+        --query 'AttachedPolicies[*].PolicyArn' \
+        --output text)
+
+    for policy in $ATTACHED_POLICIES; do
+        aws iam detach-role-policy \
+            --role-name "$IAM_ROLE" \
+            --policy-arn "$policy"
+        echo "    ✓ Detached: $policy"
+    done
+
+    echo "  Deleting role..."
+
     aws iam delete-role --role-name "$IAM_ROLE"
+
     echo "  ✓ Deleted: $IAM_ROLE"
 else
     echo "  ℹ Role not found: $IAM_ROLE"
